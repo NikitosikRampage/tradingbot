@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+config.yaml
+data/
+logs/*
+!logs/.gitkeep
+STOP
+SHUTDOWN
+.pytest_cache/

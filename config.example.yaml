@@ -1,0 +1,100 @@
+# Скопируйте в config.yaml и отредактируйте. Отсутствующие ключи берутся из значений по умолчанию.
+timezone: Europe/Moscow
+
+symbols: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT]
+
+paths:
+  db: data/bot.db
+  logs: logs
+  stop_file: STOP          # создайте этот файл -> аварийная остановка (закрыть всё, выключить trader)
+  shutdown_file: SHUTDOWN  # создаёт stop.bat -> штатная остановка процесса
+  heartbeat_file: data/heartbeat.json
+
+logging: {level: INFO, max_bytes: 10000000, backup_count: 10}
+
+exchange:
+  ws_public: wss://ws.okx.com:8443/ws/v5/public
+  ws_business: wss://ws.okx.com:8443/ws/v5/business
+  taker_fee: 0.001         # 0.1% — используется для оценки комиссии выхода в нереализованном PnL
+
+collector:
+  timeframes: [1m, 5m, 1h]
+  history: {1m: 1440, 5m: 864, 1h: 1000}   # сколько свечей подгрузить при первом старте (1h -> EMA200 на 4h)
+  retention_days: {1m: 7, 5m: 30}
+  stale_after_sec: 60      # нет тиков дольше -> новые входы на паузе
+
+alerts:
+  enabled: true
+  price_move:              # движение цены > pct% за minutes минут
+    - {pct: 2.0, minutes: 15}
+    - {pct: 4.0, minutes: 60}
+  levels: {enabled: true, windows: [24h, 7d], touch_pct: 0.3, bounce_pct: 0.8}
+  rsi: {enabled: true, period: 14, overbought: 75, oversold: 25}     # на 1h
+  volume_spike: {enabled: true, timeframe: 5m, multiplier: 3.0, lookback: 20}
+  ema_cross: {enabled: true, fast: 50, slow: 200}                    # на 4h
+  cooldown_minutes: {default: 60, price_move: 30, levels: 120, rsi: 240, volume_spike: 60, ema_cross: 720}
+
+analytics:
+  digest_enabled: true
+  digest_time: "09:00"
+  weekly_enabled: true
+  weekly_day: sun
+  weekly_time: "20:00"
+  llm:
+    enabled: false               # нужен ANTHROPIC_API_KEY в .env
+    model: claude-opus-5-5
+    effort: low
+    max_tokens: 2000
+    daily_budget_usd: 0.50       # дневной лимит расходов на токены
+    price_input_per_mtok: 4.0    # $ за 1M входных токенов (для выбранной модели)
+    price_output_per_mtok: 20.0
+    refusal_fallback: true
+
+trader:
+  enabled: false                 # по умолчанию ВЫКЛЮЧЕН. Включение: здесь или /trader_on
+  exchange_side_sl_tp: true      # OCO-ордер SL/TP на бирже (защищает, пока ПК спит)
+  tick_interval_sec: 1
+  strategy: {ema_fast: 50, ema_slow: 200, rsi_period: 14, rsi_pullback: 35, rsi_max_entry: 60}
+
+# Параметры сессии по умолчанию (/session_start переопределяет их)
+session_defaults:
+  budget_usdt: 10
+  duration_hours: 8
+  max_loss_usdt: 2
+  max_loss_pct: null
+  profit_target_usdt: 1.5
+  profit_target_pct: null
+  profit_lock: false
+  profit_lock_trail_pct: 30
+  max_trades: 10
+  max_consecutive_losses: 3
+  consecutive_loss_action: pause     # pause | stop
+  consecutive_loss_pause_minutes: 60
+  on_session_end: close_all          # close_all | manage_only
+  manage_only_max_minutes: 60
+  max_open_positions: 2
+  position_size_pct: 30
+  stop_loss_pct: 2
+  take_profit_pct: 4
+
+# Жёсткие потолки. Telegram НЕ может их превысить. Менять только здесь + перезапуск.
+hard_caps:
+  max_budget_usdt: 50
+  max_loss_usdt: 10
+  max_duration_hours: 24
+  max_trades_per_session: 50
+  max_position_size_pct: 30
+  max_open_positions: 2
+
+daily_caps:
+  daily_budget_cap_usdt: 30     # сумма бюджетов всех сессий за день
+  daily_loss_cap_usdt: 5        # суммарный убыток за день по всем сессиям
+
+schedule:
+  enabled: false
+  start_time: "00:00"
+  days: [mon, tue, wed, thu, fri, sat, sun]
+  params: {budget_usdt: 10, duration_hours: 8}
+
+health: {silent_alert_minutes: 5, check_interval_sec: 30}
+telegram: {enabled: true}

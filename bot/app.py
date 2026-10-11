@@ -1,0 +1,165 @@
+"""Application wiring and lifecycle."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from typing import Any, Awaitable, Callable
+
+from .alerts import AlertEngine
+from .analytics import Analytics
+from .collector import Collector, MarketState
+from .config import Config
+from .db import Database
+from .exchange import Exchange
+from .health import Health
+from .notifier import Notifier
+from .scheduler import Scheduler
+from .trader import Trader
+
+log = logging.getLogger(__name__)
+
+
+class App:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.db = Database(cfg.path("db"))
+        self.notifier = Notifier(cfg.secrets.telegram_chat_id)
+        self.health = Health(cfg.path("heartbeat_file"),
+                             float(cfg["health"]["silent_alert_minutes"]) * 60, self.notifier.send)
+        self.ex = Exchange(cfg)
+        self.market = MarketState()
+        self.collector = Collector(cfg, self.db, self.ex, self.market, self.health)
+        self.alerts = AlertEngine(cfg, self.db, self.market, self.notifier.send)
+        self.analytics = Analytics(cfg, self.db, self.market, self.notifier.send)
+        self.trader = Trader(cfg, self.db, self.ex, self.market, self.health, self.notifier.send)
+        self.scheduler = Scheduler(cfg, self.db, self.analytics, self.trader)
+        self.collector.on_tick.append(self.alerts.on_tick)
+        self.collector.on_candle_closed.append(self.alerts.on_candle_closed)
+        self.collector.on_candle_closed.append(self.trader.on_candle_closed)
+        self.telegram: Any = None
+        s = cfg.secrets
+        if cfg["telegram"].get("enabled", True) and s.telegram_token and s.telegram_chat_id:
+            from .telegram_bot import TelegramBot
+            self.telegram = TelegramBot(self, s.telegram_token, s.telegram_chat_id)
+        else:
+            log.warning("Telegram не настроен (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) — уведомления только в лог")
+        self.stop_event = asyncio.Event()
+        self.tasks: list[asyncio.Task[Any]] = []
+
+    # ------------------------------------------------------------------ helpers
+    async def _supervise(self, name: str, factory: Callable[[], Awaitable[Any]]) -> None:
+        """Keep a long-running coroutine alive: restart with backoff on unexpected errors."""
+        backoff = 2.0
+        while not self.stop_event.is_set():
+            started = time.time()
+            try:
+                await factory()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Задача %s упала", name)
+                self.health.error(name, str(exc))
+                if time.time() - started > 300:
+                    backoff = 2.0
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 120)
+
+    async def _retry_forever(self, name: str, fn: Callable[[], Awaitable[Any]]) -> None:
+        delay = 5.0
+        while not self.stop_event.is_set():
+            try:
+                await fn()
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("%s: %s — повтор через %.0fs", name, exc, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 300)
+
+    async def _sleep_watcher(self) -> None:
+        """Detect that the PC was asleep (event loop frozen) and resync."""
+        last = time.time()
+        while True:
+            await asyncio.sleep(5)
+            now = time.time()
+            gap = now - last
+            last = now
+            if gap > 60:
+                log.warning("Пауза %.0f сек — вероятно, сон/гибернация", gap)
+                self.notifier.send(f"😴 Компьютер «спал» ~{gap / 60:.0f} мин. Переподключаюсь, сверяю позиции.")
+                await self.collector.force_reconnect()
+                try:
+                    await self.trader.on_wake()
+                except Exception:  # noqa: BLE001
+                    log.exception("on_wake")
+
+    async def _shutdown_watcher(self) -> None:
+        f = self.cfg.path("shutdown_file")
+        while True:
+            if f.exists():
+                # the file is removed by run_forever.py / start.bat, so the supervisor also sees it
+                log.info("Найден %s — штатная остановка", f.name)
+                self.stop_event.set()
+                return
+            await asyncio.sleep(2)
+
+    # ------------------------------------------------------------------ lifecycle
+    async def run(self) -> None:
+        mode = self.ex.mode
+        log.info("Запуск: режим %s, символы %s", mode, ", ".join(self.cfg.symbols))
+        def spawn(name: str, fn: Callable[[], Awaitable[Any]]) -> None:
+            self.tasks.append(asyncio.create_task(self._supervise(name, fn), name=name))
+
+        if self.telegram is not None:
+            # in the background: no network at boot must not block the rest of the bot
+            spawn("telegram", lambda: self._retry_forever("telegram start", self.telegram.start))
+        await self._retry_forever("load_markets", self.ex.load_markets)
+
+        spawn("notifier", self.notifier.run)
+        spawn("health", lambda: self.health.run(float(self.cfg["health"]["check_interval_sec"])))
+        spawn("collector", self.collector.run)
+        spawn("sleep_watcher", self._sleep_watcher)
+        spawn("shutdown_watcher", self._shutdown_watcher)
+
+        # wait for history + first ticks before restoring the trading state
+        try:
+            await asyncio.wait_for(self.collector.backfilled_once.wait(), timeout=300)
+        except asyncio.TimeoutError:
+            log.warning("Backfill не завершился за 5 мин — продолжаю")
+        for _ in range(30):
+            if all(self.market.fresh(s, 60) for s in self.cfg.symbols):
+                break
+            await asyncio.sleep(1)
+        await self._retry_forever("restore", self.trader.restore)
+
+        spawn("trader", self.trader.run)
+        spawn("scheduler", self.scheduler.run)
+        b = self.trader.blockers()
+        self.notifier.send(f"🚀 Бот запущен [{mode}]. Мониторинг: {', '.join(s.split('/')[0] for s in self.cfg.symbols)}. "
+                           f"Trader: {'ВКЛ' if self.trader.enabled else 'выкл'}"
+                           + (f" ({'; '.join(b)})" if b and self.trader.enabled else "") + ". /help")
+        await self.stop_event.wait()
+
+    async def shutdown(self) -> None:
+        log.info("Остановка...")
+        self.stop_event.set()
+        try:
+            self.trader.persist()
+        except Exception:  # noqa: BLE001
+            log.exception("persist on shutdown")
+        self.notifier.send("⏏️ Бот остановлен штатно." + (
+            " Активная сессия будет восстановлена при следующем запуске." if self.trader.state else ""))
+        # let the notifier flush
+        for _ in range(10):
+            if self.notifier.queue.empty():
+                break
+            await asyncio.sleep(0.5)
+        for t in self.tasks:
+            t.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.telegram is not None:
+            await self.telegram.stop()
+        await self.ex.close()
+        self.db.close()
+        log.info("Остановлено.")
