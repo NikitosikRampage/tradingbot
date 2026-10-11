@@ -74,10 +74,11 @@ DEFAULTS: dict[str, Any] = {
         "strategy": {"ema_fast": 50, "ema_slow": 200, "rsi_period": 14,
                      "rsi_pullback": 35, "rsi_max_entry": 60},
         "protections": {"enabled": False},
-        "exits": {},
+        # accepted by scripts/evaluate_improvements.py on 2y of OKX history (see IMPROVEMENTS.md)
+        "exits": {"time_limit_hours": 6},
     },
     "pairlist": {"enabled": False},
-    "session_defaults": SessionParams().to_dict(),
+    "session_defaults": {**SessionParams().to_dict(), "no_entry_last_hours": 4},
     "hard_caps": HardCaps().__dict__,
     "daily_caps": DailyCaps().__dict__,
     "schedule": {"enabled": False, "start_time": "00:00",

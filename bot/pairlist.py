@@ -87,7 +87,7 @@ class PairMetrics:
     def short(self) -> str:
         def f(v: float | None, fmt: str) -> str:
             return "—" if v is None else format(v, fmt)
-        return (f"{self.symbol}: объём {self.quote_volume / 1e6:.1f}M$, спред {f(self.spread_pct, '.3f')}%, "
+        return (f"{self.symbol}: объём {self.quote_volume / 1e6:.1f}M$, спред {f(self.spread_pct, '.4f')}%, "
                 f"глубина ±1% {f((self.bid_depth or 0) / 1e3, '.0f')}k/{f((self.ask_depth or 0) / 1e3, '.0f')}k$, "
                 f"ATR {f(self.atr_pct, '.1f')}%, возраст {f(self.age_days, '.0f')}д, 24ч {f(self.change_24h_pct, '+.1f')}%")
 

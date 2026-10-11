@@ -58,7 +58,9 @@ def load_history(symbol: str, days: int, warmup_hours: int = 900, refresh: bool 
         if not rows:
             raise FileNotFoundError(f"нет кэша истории {path}")
         return [rows[k] for k in sorted(rows) if k >= start]
-    ex = ccxt.okx({"enableRateLimit": True})
+    from bot.exchange import net_options
+
+    ex = ccxt.okx({"enableRateLimit": True, **net_options(sync=True)})
     ranges = []
     if not have or have[0] > start:
         ranges.append((start, have[0] if have else now))
@@ -70,7 +72,8 @@ def load_history(symbol: str, days: int, warmup_hours: int = 900, refresh: bool 
             batch = ex.fetch_ohlcv(symbol, "1h", since=cursor, limit=100)
             batch = [x for x in batch if x[0] >= cursor]
             if not batch:
-                break
+                cursor += 100 * H  # before the listing date: skip ahead
+                continue
             for x in batch:
                 if x[0] + H <= now:  # closed candles only
                     rows[int(x[0])] = [int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5] or 0)]

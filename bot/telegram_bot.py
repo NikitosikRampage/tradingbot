@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 HELP = """Команды:
 /status — состояние бота
 /session_start budget=10 hours=8 max_loss=2 target=1.5 — запустить сессию
-   (ещё: max_loss_pct, target_pct, lock=on, trail=30, trades=10, losses=3, end=close_all|manage_only, sl=2, tp=4)
+   (ещё: max_loss_pct, target_pct, lock=on, trail=30, trades=10, losses=3, end=close_all|manage_only, sl=2, tp=4, cutoff=4)
 /session_status — время, бюджет, PnL, расстояние до лимитов
 /session_set <параметр> <значение> — изменить лимит на лету (в пределах hard_caps)
 /session_end — завершить сессию (по on_session_end)

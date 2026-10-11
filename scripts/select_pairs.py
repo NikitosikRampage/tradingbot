@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 import ccxt.async_support as ccxt  # noqa: E402
 
 from bot.config import load_config  # noqa: E402
+from bot.exchange import net_options  # noqa: E402
 from bot.pairlist import PairlistConfig, PairSelector, select_pairs  # noqa: E402
 
 
@@ -27,7 +28,7 @@ async def main() -> int:
     cfg = load_config(args.config, with_secrets=False)
     pl = PairlistConfig.from_dict(cfg.raw.get("pairlist"))
     pos = cfg.session_defaults.budget_usdt * cfg.session_defaults.position_size_pct / 100
-    ex = ccxt.okx({"enableRateLimit": True})
+    ex = ccxt.okx({"enableRateLimit": True, **net_options()})
     try:
         metrics = await PairSelector(pl, ex, pos).evaluate()
     finally:

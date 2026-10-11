@@ -70,6 +70,8 @@ class SessionParams:
     consecutive_loss_pause_minutes: float = 60.0
     on_session_end: str = "close_all"        # close_all | manage_only
     manage_only_max_minutes: float = 60.0
+    no_entry_last_hours: float = 0.0         # не открывать новые позиции за N часов до конца сессии
+                                             # (не больше половины длительности сессии)
     max_open_positions: int = 2
     position_size_pct: float = 30.0
     stop_loss_pct: float = 2.0
@@ -301,6 +303,8 @@ class RiskEngine:
             e.append("consecutive_loss_pause_minutes должен быть > 0")
         if p.on_session_end not in ON_END_MODES:
             e.append(f"on_session_end: одно из {ON_END_MODES}")
+        if p.no_entry_last_hours < 0:
+            e.append("no_entry_last_hours должен быть >= 0")
         if p.manage_only_max_minutes <= 0:
             e.append("manage_only_max_minutes должен быть > 0")
         if not (1 <= p.max_open_positions <= c.max_open_positions):
@@ -389,6 +393,9 @@ class RiskEngine:
             return False, f"сессия в статусе {state.status.value}", 0.0
         if now >= state.ends_at:
             return False, "время сессии истекло", 0.0
+        cutoff = min(p.no_entry_last_hours, p.duration_hours / 2)
+        if cutoff > 0 and now >= state.ends_at - cutoff * 3600:
+            return False, f"последние {cutoff:g}ч сессии — новые входы не открываются", 0.0
         if state.manual_paused:
             return False, "пауза (/pause)", 0.0
         if state.paused_until and now < state.paused_until:

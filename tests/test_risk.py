@@ -213,6 +213,18 @@ class TestTimer:
         acts = eng.evaluate(st, prices, T0 + 2 * 3600)
         assert kinds(acts) == ["close_all"] and acts[0].reason == StopReason.TIME
 
+    def test_entry_cutoff_before_session_end(self):
+        eng = engine()
+        st = eng.new_session(1, params(duration_hours=8, no_entry_last_hours=3), T0)
+        assert eng.can_open(st, "BTC/USDT", T0 + 5 * 3600 - 1)[0]
+        ok, reason, _ = eng.can_open(st, "BTC/USDT", T0 + 5 * 3600)
+        assert not ok and "последние" in reason
+        # short session: the cutoff is capped at half of the duration
+        st2 = eng.new_session(2, params(duration_hours=2, no_entry_last_hours=4), T0)
+        assert eng.can_open(st2, "BTC/USDT", T0 + 3599)[0]
+        assert not eng.can_open(st2, "BTC/USDT", T0 + 3600)[0]
+        assert eng.validate_params(params(no_entry_last_hours=-1))
+
     def test_no_new_entries_after_time(self):
         eng = engine()
         st = eng.new_session(1, params(duration_hours=1), T0)

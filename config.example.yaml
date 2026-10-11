@@ -66,13 +66,14 @@ trader:
     max_drawdown: {enabled: false, lookback_hours: 72, trade_limit: 3, max_drawdown_usdt: 1.0, stop_minutes: 720}
 
   # Барьеры выхода (triple barrier, как PositionExecutor в Hummingbot). Стоп только поднимается.
+  # Трейлинг и безубыток выключены: не прошли проверку out-of-sample.
   exits:
     trailing_enabled: false
     trailing_activation_pct: 2.0
     trailing_distance_pct: 1.5
     breakeven_enabled: false
     breakeven_activation_pct: 1.5
-    time_limit_hours: 0              # 0 = выкл
+    time_limit_hours: 6              # закрыть позицию через 6ч (принято по бэктесту; 0 = выкл)
 
 # Динамический отбор пар OKX spot /USDT (как Pairlists во Freqtrade).
 # Если enabled: false — торгуются symbols. Проверить выбор вручную: python scripts/select_pairs.py
@@ -111,6 +112,7 @@ session_defaults:
   consecutive_loss_pause_minutes: 60
   on_session_end: close_all          # close_all | manage_only
   manage_only_max_minutes: 60
+  no_entry_last_hours: 4             # не открывать входы за 4ч до конца сессии (принято по бэктесту, см. IMPROVEMENTS.md)
   max_open_positions: 2
   position_size_pct: 30
   stop_loss_pct: 2

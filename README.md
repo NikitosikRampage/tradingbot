@@ -31,6 +31,9 @@ Windows 11 (venv, без Docker), код кроссплатформенный (�
 | **alerts** | Движение > X% за N минут · пробой и отскок от 24h/7d high/low · RSI(14) 1h > 75 / < 25 · всплеск объёма > 3x среднего · пересечение EMA 50/200 на 4h. Cooldown на каждое правило и монету (переживает рестарт), `/mute`. |
 | **analytics** | Утренний дайджест 09:00 (Europe/Moscow): изменение 24h, волатильность, уровни (24h/7d, pivot/R1/S1), RSI, тренд 4h, корреляция с BTC. Недельный отчёт в воскресенье. Опционально — краткий разбор от Claude (модель из конфига, ключ в `.env`, дневной лимит $). |
 | **trader** | Выключен по умолчанию. Тренд EMA50 > EMA200 на 4h + вход по откату RSI(14) на 1h, только лонги. ≤ 1 позиции на монету, ≤ 2 одновременно, размер ≤ 30% бюджета сессии, SL 2% / TP 4% (настраиваются). SL/TP контролирует бот на каждом тике **и** OCO-ордер на бирже (защищает, пока ПК спит). Каждая сделка и причина входа — в БД и в Telegram. Комиссии учитываются в PnL. |
+| **protections** | Защиты входа по образцу Freqtrade: CooldownPeriod, StoplossGuard, LowProfitPairs, MaxDrawdown. Считаются из истории закрытых сделок (переживают рестарт), только блокируют входы. По умолчанию выключены. |
+| **exits** | Барьеры выхода по образцу Hummingbot (triple barrier): трейлинг-стоп, перевод в безубыток, лимит времени удержания. Стоп только поднимается, OCO на бирже переставляется вслед. По умолчанию выключены. |
+| **pairlist** | Динамический отбор 3–5 пар OKX spot /USDT: объём, спред, глубина стакана, ATR%, возраст листинга, стейблкоины, плечевые токены, признаки манипуляций, whitelist/blacklist, пересчёт раз в N часов. По умолчанию выключен. |
 | **risk/session** | Торговые «сессии» с бюджетом, таймером, лимитом убытка, целью/profit-lock, лимитами сделок/серии убытков, дневными лимитами и неизменяемыми из Telegram `hard_caps`. Чистая логика без I/O — та же используется в бэктесте и покрыта тестами. |
 
 ## Структура проекта
@@ -48,6 +51,9 @@ tradingbot/
 │   ├── config.py           # загрузка config.yaml + .env, валидация против hard_caps
 │   ├── risk.py             # ★ движок сессий и лимитов (pure)
 │   ├── strategy.py         # сигнал EMA50/200 4h + RSI 1h (pure)
+│   ├── protections.py      # защиты входа (pure)
+│   ├── exits.py            # трейлинг/безубыток/лимит времени (pure)
+│   ├── pairlist.py         # динамический отбор пар
 │   ├── indicators.py       # EMA, RSI, корреляция, ресемплинг 1h->4h
 │   ├── trader.py           # исполнение: сессии, вход/выход, OCO, сверка с биржей, восстановление
 │   ├── exchange.py         # ccxt OKX: ретраи, rate limits, ордера по clOrdId, OCO
@@ -64,7 +70,9 @@ tradingbot/
 │   ├── install_task.ps1    # Task Scheduler: автозапуск при входе + watchdog каждые 5 мин
 │   ├── uninstall_task.ps1
 │   ├── install_nssm.bat    # вариант: Windows-служба через NSSM
-│   └── watchdog.py         # внешний сторож: Telegram-алерт, если бот молчит
+│   ├── watchdog.py         # внешний сторож: Telegram-алерт, если бот молчит
+│   ├── select_pairs.py     # какие пары бот выбрал бы прямо сейчас (с цифрами)
+│   └── evaluate_improvements.py  # улучшения vs база: in-sample/out-of-sample + walk-forward
 ├── tests/                  # pytest: risk/session, trader (fake exchange), индикаторы, алерты, бэктест
 ├── docs/WINDOWS.md
 ├── data/                   # bot.db, heartbeat.json, кэш бэктеста (создаётся автоматически)
@@ -90,6 +98,9 @@ py -3.11 -m venv .venv
 copy config.example.yaml config.yaml
 copy .env.example .env
 ```
+
+За корпоративным прокси бот берёт `HTTPS_PROXY` и CA-бандл (`SSL_CERT_FILE` /
+`REQUESTS_CA_BUNDLE`) из переменных окружения.
 
 Проверка запуска в консоли (Ctrl+C — штатная остановка):
 
@@ -153,6 +164,7 @@ session_defaults:            # используются, если не зада�
   consecutive_loss_action: pause   # pause | stop
   on_session_end: close_all        # close_all | manage_only
   manage_only_max_minutes: 60
+  no_entry_last_hours: 4           # не открывать входы за 4ч до конца сессии (≤ половины сессии)
   stop_loss_pct: 2
   take_profit_pct: 4
 
@@ -222,7 +234,7 @@ Claude-разбор дайджеста: `analytics.llm.enabled: true`, ключ 
 
 | Команда | Описание |
 |---|---|
-| `/session_start budget=10 hours=8 max_loss=2 target=1.5` | запустить сессию; недостающее — из `session_defaults`. Доп. ключи: `max_loss_pct`, `target_pct`, `lock=on`, `trail=30`, `trades=10`, `losses=3`, `end=manage_only`, `sl=2`, `tp=4` |
+| `/session_start budget=10 hours=8 max_loss=2 target=1.5` | запустить сессию; недостающее — из `session_defaults`. Доп. ключи: `max_loss_pct`, `target_pct`, `lock=on`, `trail=30`, `trades=10`, `losses=3`, `end=manage_only`, `sl=2`, `tp=4`, `cutoff=4` |
 | `/session_status` | оставшееся время, бюджет (в позициях / доступно), PnL (реализ./нереализ./комиссии), расстояние до лимита убытка и цели, сделки |
 | `/session_set <параметр> <значение>` | изменить на лету (в пределах `hard_caps`), напр. `/session_set max_loss 1.5`, `/session_set hours 6`, `/session_set lock on` |
 | `/session_end` | завершить сессию по `on_session_end` |
@@ -231,6 +243,8 @@ Claude-разбор дайджеста: `analytics.llm.enabled: true`, ключ 
 | `/stop` | **аварийно**: закрыть всё по рынку и выключить trader |
 | `/trader_on`, `/trader_off` | включить/выключить trader |
 | `/confirm_live <код>` | подтверждение реального счёта |
+| `/pairs`, `/pairs refresh` | текущие торгуемые пары с цифрами и причины отказа остальным; пересчитать сейчас |
+| `/protections` | активные блокировки входов (cooldown, StoplossGuard, ...) |
 | `/digest`, `/weekly`, `/mute <мин>`, `/health`, `/help` | отчёты, тишина алертов, heartbeat |
 
 Файл **`STOP`** в папке проекта = `/stop` (работает, даже если Telegram недоступен). Пока файл
@@ -272,9 +286,41 @@ Start-ScheduledTask -TaskName OKXBot
 * `start.bat` — запустить в фоне (без окна), с автоперезапуском при падении.
 * `stop.bat` — штатно остановить (сессия сохранится и восстановится при старте).
 
+## Защиты, барьеры выхода и отбор пар
+
+По умолчанию включено только то, что прошло проверку `scripts/evaluate_improvements.py` на 2 годах
+реальной истории OKX: **лимит удержания позиции 6ч** (`trader.exits.time_limit_hours: 6`) и **запрет
+новых входов за 4ч до конца сессии** (`session_defaults.no_entry_last_hours: 4`, в Telegram — `cutoff=`).
+Защиты, трейлинг, безубыток и динамический отбор пар реализованы, но выключены. Результаты и
+честная оценка — в [IMPROVEMENTS.md](IMPROVEMENTS.md): даже после улучшений стратегия в бэктесте
+убыточна, переход на реальный счёт не рекомендуется.
+Ни один из них не ослабляет лимиты сессии, `hard_caps`, `/stop` и файл `STOP`.
+
+* `trader.protections` — блокировки входов, считаются из закрытых сделок **всех** сессий:
+  `cooldown_minutes` (пауза по паре после выхода), `stoploss_guard` (N стоп-лоссов за окно → пауза по
+  всем парам), `low_profit_pairs` (пара в минусе за окно → пауза по паре), `max_drawdown` (просадка
+  реализованного PnL за окно → пауза по всем). `/protections` показывает активные блокировки.
+* `trader.exits` — `trailing_*`, `breakeven_*`, `time_limit_hours`. Стоп поднимается и на бирже (OCO
+  перевыставляется не чаще раза в 30 с и только при сдвиге ≥ 0.3%).
+* `pairlist` — при `enabled: true` бот торгует 3–5 пар, отобранных из всех OKX spot */USDT:
+  1. дешёвые фильтры по тикерам: объём 24ч ≥ `min_quote_volume_usdt`, цена, стейблкоины, плечевые токены, blacklist;
+  2. `candidates` самых ликвидных — детально: спред ≤ `max_spread_pct`, глубина стакана в ±`depth_band_pct`%
+     ≥ `min_depth_usdt` с каждой стороны, ATR%(14, 1d) в [`min_atr_pct`; `max_atr_pct`], возраст
+     листинга ≥ `min_listing_days` (по `listTime` OKX), признаки манипуляций (изменение за 24ч,
+     всплеск объёма к медиане 30 дней, экстремальные дневные диапазоны), минимальный ордер биржи
+     не больше половины размера позиции;
+  3. сначала `whitelist` (если прошли фильтры), затем по убыванию объёма, максимум `max_pairs`.
+
+  Список пересчитывается раз в `refresh_hours`, хранится в БД (переживает рестарт); при изменении —
+  сообщение в Telegram и переподписка WebSocket. Позиции по парам, выпавшим из списка, ведутся до
+  выхода. Мониторинг/алерты/дайджест продолжают работать по `symbols`. Проверить, что выбрал бы бот
+  сейчас: `python scripts/select_pairs.py`.
+
 ## Бэктест
 
 ```bat
+.venv\Scripts\python backtest.py --days 365 --per-pair --walk-forward 4 --monte-carlo 5000 --lookahead-check
+.venv\Scripts\python scripts\evaluate_improvements.py --days 365
 .venv\Scripts\python backtest.py --days 180 --compare
 .venv\Scripts\python backtest.py --days 365 --compare budget=10 hours=8 max_loss=1 target=1 lock=on trail=30
 .venv\Scripts\python backtest.py --symbols BTC/USDT ETH/USDT --start-hour 9 end=manage_only --trades-csv data\trades.csv
@@ -283,9 +329,20 @@ Start-ScheduledTask -TaskName OKXBot
 История 1h качается с OKX (публичный API, без ключей) и кэшируется в `data/backtest/`.
 Используются **тот же** `RiskEngine` и та же стратегия, что и в живой торговле: сессии стартуют
 каждый день в `--start-hour` (по умолчанию из `schedule.start_time`), действуют дневные лимиты.
-SL/TP — внутри бара по high/low (если задеты оба — пессимистично считается SL), лимиты убытка
-проверяются по минимумам бара, затем по закрытию; комиссия — `exchange.taker_fee`, проскальзывание
-`--slippage`. `--compare` дополнительно прогоняет стратегию без лимитов сессии (только SL/TP, 24/7) —
+SL/TP — внутри бара по high/low (если задеты оба — пессимистично считается SL), трейлинг поднимает
+стоп только со следующего бара, лимиты убытка проверяются по минимумам бара, затем по закрытию;
+комиссия — `exchange.taker_fee` (меньше 0.1% на сторону бэктест не принимает), проскальзывание
+`--slippage` на каждой сделке. Защиты и барьеры выхода — те же модули, что в живой торговле.
+
+* `--per-pair` — результат по парам с t-статистикой (|t| < 2 — неотличимо от нуля).
+* `--walk-forward K` — K последовательных независимых окон: стабилен ли результат во времени.
+* `--monte-carlo N` — бутстреп последовательности сделок: разброс PnL (p5…p95), P(PnL>0), просадка p95.
+* `--lookahead-check` — как lookahead-analysis во Freqtrade: сигналы и индикаторы, посчитанные на всей
+  истории, сравниваются с посчитанными на истории, обрезанной на этом баре.
+* `--offline` — только кэш `data/backtest/` (воспроизводимый прогон без сети).
+* `scripts/evaluate_improvements.py` — каждое улучшение против базы: не хуже in-sample, лучше
+  out-of-sample, лучше в ≥ половине окон walk-forward и без роста просадки > 25%; итог — в
+  `data/backtest/evaluation.md`. `--compare` дополнительно прогоняет стратегию без лимитов сессии (только SL/TP, 24/7) —
 так видно, как лимиты влияют на результат (PnL, просадку, число сделок, причины остановок).
 
 ## Тесты
@@ -302,7 +359,11 @@ SL/TP — внутри бара по high/low (если задеты оба — 
   восстановление после рестарта (OCO сработал во время простоя, подвисший ордер, просроченная сессия
   не продлевается и новая не стартует), дневной лимит бюджета.
 * `tests/test_indicators_strategy.py`, `tests/test_backtest.py` — индикаторы, сигнал, разбор WS-сообщений,
-  алерты и cooldown, бэктест на синтетике.
+  алерты и cooldown, бэктест на синтетике (комиссии на каждой сделке, окна walk-forward, Monte Carlo,
+  lookahead-проверка ловит намеренно «подглядывающую» стратегию).
+* `tests/test_protections_exits_pairlist.py` — каждая защита, трейлинг/безубыток/лимит времени,
+  каждый фильтр пар, whitelist/blacklist, сохранение списка пар; в `test_trader.py` — трейлинг
+  переставляет OCO, StoplossGuard блокирует вход.
 
 ## Чеклист перехода с демо на реал
 

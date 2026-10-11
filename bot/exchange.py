@@ -38,6 +38,22 @@ class Fill:
         return self.fee_quote + self.fee_base * self.avg_price
 
 
+def net_options(sync: bool = False) -> dict[str, Any]:
+    """ccxt ignores HTTPS_PROXY unless told so; honour the proxy and a custom CA bundle
+    (SSL_CERT_FILE / REQUESTS_CA_BUNDLE) from the environment, e.g. behind a corporate proxy."""
+    import os
+
+    opts: dict[str, Any] = {}
+    if os.getenv("HTTPS_PROXY") or os.getenv("https_proxy"):
+        opts["requests_trust_env" if sync else "aiohttp_trust_env"] = True
+    if sync:
+        return opts  # requests reads REQUESTS_CA_BUNDLE itself when trust_env is on
+    ca = os.getenv("SSL_CERT_FILE")
+    if ca and os.path.exists(ca):
+        opts["cafile"] = ca
+    return opts
+
+
 def inst_id(symbol: str) -> str:
     return symbol.replace("/", "-")
 
@@ -57,14 +73,15 @@ class Exchange:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         timeout = int(cfg["exchange"]["request_timeout_ms"])
-        self.public = ccxt.okx({"enableRateLimit": True, "timeout": timeout})
+        self.public = ccxt.okx({"enableRateLimit": True, "timeout": timeout, **net_options()})
         s = cfg.secrets
         self.live = s.live_trading
         self.private: ccxt.okx | None = None
         if s.okx_key and s.okx_secret and s.okx_passphrase:
             self.private = ccxt.okx({"apiKey": s.okx_key, "secret": s.okx_secret,
                                      "password": s.okx_passphrase, "enableRateLimit": True,
-                                     "timeout": timeout, "options": {"defaultType": "spot"}})
+                                     "timeout": timeout, "options": {"defaultType": "spot"},
+                                     **net_options()})
             if not self.live:
                 self.private.set_sandbox_mode(True)
         self.markets_loaded = False

@@ -38,7 +38,7 @@ PARAM_ALIASES = {
     "losses": "max_consecutive_losses", "max_consecutive_losses": "max_consecutive_losses",
     "on_end": "on_session_end", "end": "on_session_end", "on_session_end": "on_session_end",
     "manage_minutes": "manage_only_max_minutes", "sl": "stop_loss_pct", "tp": "take_profit_pct",
-    "size": "position_size_pct", "positions": "max_open_positions",
+    "size": "position_size_pct", "positions": "max_open_positions", "cutoff": "no_entry_last_hours",
 }
 
 
