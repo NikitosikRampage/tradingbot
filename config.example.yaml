@@ -54,7 +54,24 @@ trader:
   enabled: false                 # по умолчанию ВЫКЛЮЧЕН. Включение: здесь или /trader_on
   exchange_side_sl_tp: true      # OCO-ордер SL/TP на бирже (защищает, пока ПК спит)
   tick_interval_sec: 1
-  strategy: {ema_fast: 50, ema_slow: 200, rsi_period: 14, rsi_pullback: 35, rsi_max_entry: 60}
+  # Стратегия: тренд EMA50/200 на 4h + вход на 1h. Принято по исследованию 2019 → сегодня (IMPROVEMENTS.md):
+  # пробой 20-часового максимума, SL/TP по ATR(1h) (стоп не шире stop_loss_pct сессии), фильтр режима BTC.
+  # Прежний вариант: entry_mode: pullback, exit_mode: fixed, btc_regime: false.
+  strategy:
+    ema_fast: 50
+    ema_slow: 200
+    rsi_period: 14
+    rsi_pullback: 35           # для entry_mode: pullback
+    rsi_max_entry: 60
+    entry_mode: breakout       # pullback | breakout
+    breakout_bars: 20
+    rsi_max_breakout: 75
+    exit_mode: atr             # fixed (SL/TP из сессии) | atr
+    atr_period: 14
+    atr_sl_mult: 2.0           # SL = min(stop_loss_pct, 2 × ATR1h)
+    atr_tp_mult: 3.0           # TP = 3 × ATR1h
+    min_atr_pct: 0             # фильтр ATR не прошёл проверку — выключен
+    btc_regime: true           # альты только при аптренде BTC на 4h
 
   # Защиты входа (как Protections во Freqtrade). Только БЛОКИРУЮТ входы, лимиты сессии не ослабляют.
   # Выключены, пока scripts/evaluate_improvements.py не покажет улучшение out-of-sample на реальной истории.

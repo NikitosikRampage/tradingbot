@@ -79,7 +79,7 @@ def main() -> int:
     cfg = load_config(args.config, with_secrets=False)
     # baseline = strategy WITHOUT any of the improvements (independent of what config.yaml enables)
     params, engine = build(cfg, {"no_entry_last_hours": 0}, args.fee)
-    strat = StrategyParams.from_dict(cfg["trader"]["strategy"])
+    strat = StrategyParams.from_dict(cfg["trader"]["strategy"])  # variants are compared on top of the configured strategy
     symbols = [s.upper() for s in (args.symbols or cfg.symbols)]
     data = {s: load_history(s, args.days, offline=args.offline) for s in symbols}
     start_hour = int(str(cfg["schedule"]["start_time"]).split(":")[0])

@@ -21,11 +21,11 @@ from .db import Database
 from .exchange import Exchange, new_client_id
 from .health import Health
 from .exits import ExitConfig, check_exit, raise_stop
-from .marketdata import closes, closes_4h
+from .marketdata import closes_4h
 from .protections import ClosedTrade, ProtectionConfig, compute_locks, entry_blocked
 from .risk import (STOP_REASON_RU, Action, DailyStats, Position, SessionParams, SessionState,
                    SessionStatus, StopReason)
-from .strategy import StrategyParams, generate_signal
+from .strategy import Signal, StrategyParams, exit_levels, generate_signal
 
 log = logging.getLogger(__name__)
 
@@ -372,8 +372,12 @@ class Trader:
             if blocked:
                 log.info("entry %s blocked by protection: %s", symbol, why)
                 return
-            sig = generate_signal(symbol, closes(self.db, symbol, "1h", 300),
-                                  closes_4h(self.db, symbol, self.strategy.ema_slow + 60), self.strategy)
+            c1 = self.db.candles(symbol, "1h", limit=300)
+            btc4 = (closes_4h(self.db, "BTC/USDT", self.strategy.ema_slow + 60)
+                    if self.strategy.btc_regime else None)
+            sig = generate_signal(symbol, [r[4] for r in c1],
+                                  closes_4h(self.db, symbol, self.strategy.ema_slow + 60), self.strategy,
+                                  candles_1h=c1, btc_closes_4h=btc4, fee_rate=self.engine.fee_rate)
             if sig is None:
                 return
             try:
@@ -395,9 +399,10 @@ class Trader:
                 self.db.update_trade(trade_id, status="failed", exit_reason=f"buy error: {exc}"[:500])
                 self.notify(f"❌ Ошибка покупки {symbol}: {exc}")
                 return
-            await self._register_fill(st, trade_id, symbol, fill, sig.reason)
+            await self._register_fill(st, trade_id, symbol, fill, sig.reason, sig)
 
-    async def _register_fill(self, st: SessionState, trade_id: int, symbol: str, fill: Any, reason: str) -> None:
+    async def _register_fill(self, st: SessionState, trade_id: int, symbol: str, fill: Any, reason: str,
+                             sig: Signal | None = None) -> None:
         if fill.filled_base <= 0:
             self.db.update_trade(trade_id, status="failed", exit_reason=f"not filled ({fill.status})")
             self.notify(f"❌ Ордер {symbol} не исполнен ({fill.status}).")
@@ -406,10 +411,10 @@ class Trader:
         qty = fill.filled_base - fill.fee_base
         cost = fill.quote_amount + fill.fee_quote
         entry = fill.avg_price
+        stop, target = exit_levels(entry, sig, p.stop_loss_pct, p.take_profit_pct)
         pos = Position(symbol=symbol, qty=qty, entry_price=entry, cost_usdt=cost,
-                       entry_fee_usdt=fill.fee_usdt, stop_loss=entry * (1 - p.stop_loss_pct / 100),
-                       take_profit=entry * (1 + p.take_profit_pct / 100), opened_at=time.time(),
-                       trade_id=trade_id, highest=entry)
+                       entry_fee_usdt=fill.fee_usdt, stop_loss=stop, take_profit=target,
+                       opened_at=time.time(), trade_id=trade_id, highest=entry)
         pos.initial_stop = pos.stop_loss
         self.engine.record_open(st, pos)
         if self.exchange_sl_tp:
@@ -425,7 +430,8 @@ class Trader:
         self.persist()
         self.notify(f"🟢 ВХОД {symbol} (сессия #{st.session_id}, сделка {st.trades_opened}/{p.max_trades})\n"
                     f"Цена {entry:.6g}, кол-во {qty:.8g}, потрачено {cost:.4f} USDT, комиссия {fill.fee_usdt:.4f}\n"
-                    f"SL {pos.stop_loss:.6g} (-{p.stop_loss_pct}%), TP {pos.take_profit:.6g} (+{p.take_profit_pct}%)"
+                    f"SL {pos.stop_loss:.6g} ({(pos.stop_loss / entry - 1) * 100:+.2f}%), "
+                    f"TP {pos.take_profit:.6g} ({(pos.take_profit / entry - 1) * 100:+.2f}%)"
                     f"{' [OCO на бирже]' if pos.algo_id else ''}\nПричина: {reason}")
 
     # ================================================================== exits

@@ -30,7 +30,7 @@ from bot.indicators import resample
 from bot.protections import ClosedTrade, ProtectionConfig, entry_blocked
 from bot.risk import (STOP_REASON_RU, DailyCaps, DailyStats, HardCaps, Position, RiskEngine,
                       SessionParams, SessionStatus, StopReason)
-from bot.strategy import StrategyParams, generate_signal
+from bot.strategy import Signal, StrategyParams, atr_pct_1h, exit_levels, generate_signal
 from bot.trader import resolve_param
 
 H = 3600_000
@@ -69,7 +69,14 @@ def load_history(symbol: str, days: int, warmup_hours: int = 900, refresh: bool 
     for a, b in ranges:
         cursor = a
         while cursor < b:
-            batch = ex.fetch_ohlcv(symbol, "1h", since=cursor, limit=100)
+            for attempt in range(6):
+                try:
+                    batch = ex.fetch_ohlcv(symbol, "1h", since=cursor, limit=100)
+                    break
+                except ccxt.NetworkError:  # incl. rate limits: back off and retry
+                    if attempt == 5:
+                        raise
+                    time.sleep(2 ** attempt)
             batch = [x for x in batch if x[0] >= cursor]
             if not batch:
                 cursor += 100 * H  # before the listing date: skip ahead
@@ -191,7 +198,8 @@ class Backtester:
     def __init__(self, data: dict[str, list[list[float]]], engine: RiskEngine, params: SessionParams,
                  strat: StrategyParams, tz: Any, start_hour: int, fee: float, slippage: float,
                  exits: ExitConfig | None = None, protections: ProtectionConfig | None = None,
-                 continuous: bool = False):
+                 continuous: bool = False, signal_cache: dict | None = None,
+                 random_entry: tuple[float, int] | None = None):
         self.data = data
         self.engine = engine
         self.params = params
@@ -203,6 +211,10 @@ class Backtester:
         self.exits = exits or ExitConfig()
         self.protections = protections or ProtectionConfig()
         self.continuous = continuous
+        # signals depend only on (data, strategy, bar): share the cache between runs of one strategy
+        self.signal_cache = signal_cache if signal_cache is not None else {}
+        # control experiment: enter at random with probability p per bar (same exits/limits)
+        self.random_entry = random_entry
         self.idx = {s: {int(r[0]): i for i, r in enumerate(rows)} for s, rows in data.items()}
         self.c4 = {s: resample(rows, "1h", "4h", drop_incomplete=False) for s, rows in data.items()}
         self.c4ts = {s: [int(r[0]) for r in c] for s, c in self.c4.items()}
@@ -213,9 +225,19 @@ class Backtester:
         return [r[4] for r in self.c4[s][max(0, j - (self.strat.ema_slow + 60)):j]]
 
     def signal_at(self, sym: str, i: int):
+        per_sym = self.signal_cache.setdefault(sym, {})
+        if i in per_sym:
+            return per_sym[i]
         rows = self.data[sym]
-        c1 = [r[4] for r in rows[max(0, i - 299):i + 1]]
-        return generate_signal(sym, c1, self.closes_4h(sym, int(rows[i][0]) + H), self.strat)
+        c1 = rows[max(0, i - 299):i + 1]
+        close_ms = int(rows[i][0]) + H
+        btc4 = None
+        if self.strat.btc_regime and "BTC/USDT" in self.data:
+            btc4 = self.closes_4h("BTC/USDT", close_ms)
+        sig = generate_signal(sym, [r[4] for r in c1], self.closes_4h(sym, close_ms), self.strat,
+                              candles_1h=c1, btc_closes_4h=btc4, fee_rate=self.fee)
+        per_sym[i] = sig
+        return sig
 
     def run(self, name: str, start_ts: float, end_ts: float | None = None) -> Result:
         res = Result(name)
@@ -228,6 +250,8 @@ class Backtester:
         daily_budget: dict[str, float] = defaultdict(float)
         closed: list[ClosedTrade] = []
         open_meta: dict[str, float] = {}
+        session_day_pnl: dict[tuple[int, str], float] = defaultdict(float)
+        rnd = random.Random(self.random_entry[1]) if self.random_entry else None
         last_ts = timeline[-1] if timeline else 0
         for ts in timeline:
             bar_close = (ts + H) / 1000.0
@@ -251,6 +275,7 @@ class Backtester:
                 fee = gross * self.fee
                 pnl = self.engine.record_close(st, sym, gross - fee, fee)
                 daily_realized[day] += pnl
+                session_day_pnl[(st.session_id, day)] += pnl
                 pct = pnl / pos.cost_usdt * 100
                 res.trades.append(TradeRow(st.session_id, sym, open_meta.pop(sym), bar_close, pos.entry_price,
                                            price, pnl, pct, pos.entry_fee_usdt + fee, kind))
@@ -277,9 +302,7 @@ class Backtester:
                 if st.status == SessionStatus.ENDED:
                     break
                 prices = {s: b[field_i] for s, b in bars.items()}
-                cur_today = sum(t.pnl for t in res.trades if t.session_id == st.session_id
-                                and datetime.fromtimestamp(t.exit_ts, self.tz).strftime("%Y-%m-%d") == day)
-                daily = DailyStats(daily_budget[day], daily_realized[day] - cur_today)
+                daily = DailyStats(daily_budget[day], daily_realized[day] - session_day_pnl[(st.session_id, day)])
                 for a in self.engine.evaluate(st, prices, bar_close, daily):
                     if a.kind == "close_all":
                         for sym in list(st.positions):
@@ -294,15 +317,28 @@ class Backtester:
                         continue
                     if entry_blocked(closed, self.protections, sym, bar_close)[0]:
                         continue
-                    if self.signal_at(sym, self.idx[sym][ts]) is None:
-                        continue
+                    if rnd is not None:
+                        i = self.idx[sym][ts]
+                        if rnd.random() >= self.random_entry[0] or i < 300:
+                            continue
+                        sig = None
+                        if self.strat.exit_mode == "atr":  # same exit rule as the strategy under test
+                            a = atr_pct_1h(self.data[sym][i - 140:i + 1], self.strat.atr_period)
+                            if a is None:
+                                continue
+                            sig = Signal(sym, b[4], "random", 0, 0, 0, 0, sl_pct=self.strat.atr_sl_mult * a,
+                                         tp_pct=max(self.strat.atr_tp_mult * a, 6 * self.fee * 100 + 0.01))
+                    else:
+                        sig = self.signal_at(sym, self.idx[sym][ts])
+                        if sig is None:
+                            continue
                     price = b[4] * (1 + self.slip)
                     qty = size / price * (1 - self.fee)
                     p = st.params
-                    stop = price * (1 - p.stop_loss_pct / 100)
+                    stop, target = exit_levels(price, sig, p.stop_loss_pct, p.take_profit_pct)
                     self.engine.record_open(st, Position(
                         symbol=sym, qty=qty, entry_price=price, cost_usdt=size, entry_fee_usdt=size * self.fee,
-                        stop_loss=stop, take_profit=price * (1 + p.take_profit_pct / 100),
+                        stop_loss=stop, take_profit=target,
                         opened_at=bar_close, highest=price, initial_stop=stop))
                     open_meta[sym] = bar_close
 
@@ -335,7 +371,9 @@ def lookahead_check(data: dict[str, list[list[float]]], strat: StrategyParams, s
         idxs = sorted(rnd.sample(range(start, len(rows)), min(samples, len(rows) - start)))
         for i in idxs:
             full = bt.signal_at(sym, i)
-            trunc = {sym: rows[:i + 1]}
+            cut_ts = rows[i][0]   # truncate EVERY symbol at the same moment (BTC regime filter)
+            trunc = {s2: (r2[:i + 1] if s2 == sym else [r for r in r2 if r[0] <= cut_ts])
+                     for s2, r2 in data.items()}
             tb = cls(trunc, bt.engine, bt.params, strat, None, 0, MIN_FEE, 0)
             cut = tb.signal_at(sym, i)
             same = (full is None and cut is None) or (

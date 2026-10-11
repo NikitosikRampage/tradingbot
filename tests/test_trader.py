@@ -361,3 +361,24 @@ def test_protection_blocks_entry_after_stoplosses(env):
         tr.generate_signal = orig
     assert "ETH/USDT" not in t.state.positions
     assert "StoplossGuard" in t.protections_text()
+
+
+def test_atr_stop_is_capped_by_session_stop(env):
+    cfg, db, ex, market, msgs, make = env
+    t = make()
+    from bot.strategy import Signal
+
+    async def scenario():
+        await t.start_session({"stop_loss_pct": 2})
+        st = t.state
+        set_price(market, ex, "ETH/USDT", 100.0)
+        fill = await ex.market_buy_cost("ETH/USDT", 3.0, "atrcid")
+        tid = db.insert_trade(session_id=st.session_id, symbol="ETH/USDT", mode="demo", status="pending",
+                              client_order_id="atrcid", entry_ts=time.time(), entry_reason="test")
+        wide = Signal("ETH/USDT", 100, "test", 1, 1, 30, 36, sl_pct=5.0, tp_pct=6.0, atr_pct=2.5)
+        await t._register_fill(st, tid, "ETH/USDT", fill, "test", wide)
+        return st.positions["ETH/USDT"]
+
+    pos = run(scenario())
+    assert pos.stop_loss == pytest.approx(100 * 0.98)      # 5% ATR stop capped at the session 2%
+    assert pos.take_profit == pytest.approx(106.0)

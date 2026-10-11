@@ -116,3 +116,51 @@ def test_volume_spike_and_levels(stack):
     alerts.check_levels("XRP/USDT", 0.801)
     alerts.check_levels("XRP/USDT", 0.82)
     assert any("отскок вверх от 24h low" in m for m in msgs)
+
+
+# ---------------------------------------------------------------- new strategy modes
+def _rows(closes, spread=0.004):
+    return [[i * 3_600_000, c, c * (1 + spread), c * (1 - spread), c, 1.0] for i, c in enumerate(closes)]
+
+
+def test_breakout_entry_and_atr_exits():
+    from bot.strategy import exit_levels
+    p = StrategyParams(ema_fast=5, ema_slow=20, rsi_period=5, entry_mode="breakout", breakout_bars=10,
+                       rsi_max_breakout=101, exit_mode="atr", atr_period=5, atr_sl_mult=2, atr_tp_mult=3)
+    up4h = [100 + i for i in range(40)]
+    c1h = [100.0] * 30 + [100.2, 100.1, 100.3, 100.2, 101.5]
+    sig = generate_signal("ETH/USDT", c1h, up4h, p, candles_1h=_rows(c1h))
+    assert sig is not None and "пробой" in sig.reason and sig.atr_pct > 0
+    assert sig.sl_pct == pytest.approx(2 * sig.atr_pct) and sig.tp_pct == pytest.approx(3 * sig.atr_pct)
+    # the stop is never wider than the session stop_loss_pct
+    sl, tp = exit_levels(100.0, sig, stop_loss_pct=0.1, take_profit_pct=4)
+    assert sl == pytest.approx(99.9) and tp == pytest.approx(100 * (1 + sig.tp_pct / 100))
+    # no breakout -> no signal
+    assert generate_signal("ETH/USDT", c1h[:-1] + [100.25], up4h, p, candles_1h=_rows(c1h[:-1] + [100.25])) is None
+
+
+def test_min_atr_filter_and_btc_regime():
+    p = StrategyParams(ema_fast=5, ema_slow=20, rsi_period=5, min_atr_pct=5.0)
+    up4h = [100 + i for i in range(40)]
+    c1h = [100 + i * 0.5 for i in range(30)] + [113, 112, 111, 110, 111.2]
+    assert generate_signal("SOL/USDT", c1h, up4h, p, candles_1h=_rows(c1h)) is None      # ATR too small
+    p2 = StrategyParams(ema_fast=5, ema_slow=20, rsi_period=5, btc_regime=True)
+    down = list(reversed(up4h))
+    assert generate_signal("SOL/USDT", c1h, up4h, p2, candles_1h=_rows(c1h), btc_closes_4h=down) is None
+    assert generate_signal("SOL/USDT", c1h, up4h, p2, candles_1h=_rows(c1h), btc_closes_4h=up4h) is not None
+    assert generate_signal("BTC/USDT", c1h, up4h, p2, candles_1h=_rows(c1h), btc_closes_4h=down) is not None
+
+
+def test_default_params_keep_original_behaviour():
+    p = StrategyParams(ema_fast=5, ema_slow=20, rsi_period=5)
+    up4h = [100 + i for i in range(40)]
+    c1h = [100 + i * 0.5 for i in range(30)] + [113, 112, 111, 110, 111.2]
+    sig = generate_signal("BTC/USDT", c1h, up4h, p)          # no candles needed in the default mode
+    assert sig is not None and sig.sl_pct is None and sig.tp_pct is None
+
+
+def test_unknown_strategy_param_rejected():
+    with pytest.raises(ValueError):
+        StrategyParams.from_dict({"entry_mode": "magic"})
+    with pytest.raises(ValueError):
+        StrategyParams.from_dict({"rsi_pulback": 30})

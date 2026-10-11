@@ -12,6 +12,7 @@ import yaml
 from dotenv import load_dotenv
 
 from .risk import DailyCaps, HardCaps, RiskEngine, SessionParams
+from .strategy import StrategyParams
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -71,8 +72,11 @@ DEFAULTS: dict[str, Any] = {
         "enabled": False,
         "exchange_side_sl_tp": True,
         "tick_interval_sec": 1.0,
+        # entry/exit accepted by scripts/research.py (2019-2022 dev, 2023-now holdout; see IMPROVEMENTS.md)
         "strategy": {"ema_fast": 50, "ema_slow": 200, "rsi_period": 14,
-                     "rsi_pullback": 35, "rsi_max_entry": 60},
+                     "rsi_pullback": 35, "rsi_max_entry": 60,
+                     "entry_mode": "breakout", "breakout_bars": 20,
+                     "exit_mode": "atr", "atr_sl_mult": 2.0, "atr_tp_mult": 3.0, "btc_regime": True},
         "protections": {"enabled": False},
         # accepted by scripts/evaluate_improvements.py on 2y of OKX history (see IMPROVEMENTS.md)
         "exits": {"time_limit_hours": 6},
@@ -199,6 +203,7 @@ def load_config(path: Path | str | None = None, root: Path | None = None,
     from .protections import ProtectionConfig
     try:
         ProtectionConfig.from_dict(raw["trader"].get("protections"))
+        StrategyParams.from_dict(raw["trader"].get("strategy"))
         ExitConfig.from_dict(raw["trader"].get("exits"))
         PairlistConfig.from_dict(raw.get("pairlist"))
     except (TypeError, ValueError) as exc:

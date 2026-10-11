@@ -58,7 +58,8 @@ class App:
     def _watch_symbols(self) -> list[str]:
         """Monitoring list + current trading pairs + symbols with open positions."""
         held = list(self.trader.state.positions) if self.trader.state else []
-        return list(dict.fromkeys([*self.cfg.symbols, *self.pairlist.symbols(), *held]))
+        btc = ["BTC/USDT"] if self.trader.strategy.btc_regime else []  # needed by the BTC regime filter
+        return list(dict.fromkeys([*self.cfg.symbols, *btc, *self.pairlist.symbols(), *held]))
 
     async def _on_pairs_changed(self, pairs: list[str]) -> None:
         await self.collector.set_symbols(self._watch_symbols())

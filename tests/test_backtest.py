@@ -100,3 +100,26 @@ def test_lookahead_check_detects_a_biased_strategy():
     data = {"BTC/USDT": synthetic(1400)}
     sp = StrategyParams(rsi_pullback=45, rsi_max_entry=70)
     assert lookahead_check(data, sp, samples=400, cls=Leaky) != []
+
+
+def test_no_lookahead_in_breakout_atr_mode():
+    sp = StrategyParams(entry_mode="breakout", exit_mode="atr", min_atr_pct=0.1, btc_regime=True)
+    data = {"BTC/USDT": synthetic(1400), "ETH/USDT": synthetic(1400, seed=1.3)}
+    assert lookahead_check(data, sp, samples=80) == []
+
+
+def test_signal_cache_gives_identical_results():
+    cache = {}
+    a = make_bt().run("a", START)
+    bt = make_bt()
+    bt.signal_cache = cache
+    b1 = bt.run("b1", START)
+    b2 = bt.run("b2", START)       # second run served from the cache
+    assert cache and [t.pnl for t in a.trades] == [t.pnl for t in b1.trades] == [t.pnl for t in b2.trades]
+
+
+def test_random_entry_control_runs():
+    bt = make_bt()
+    bt.random_entry = (0.05, 7)
+    r = bt.run("rnd", START)
+    assert r.trades and all(t.kind for t in r.trades)
