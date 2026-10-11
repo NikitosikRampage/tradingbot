@@ -181,6 +181,9 @@ class Position:
     opened_at: float
     trade_id: int | None = None
     algo_id: str | None = None   # exchange-side OCO order id
+    highest: float = 0.0         # highest price seen since entry (trailing stop)
+    initial_stop: float = 0.0    # stop-loss at entry (to tell SL from trailing exits)
+    oco_stop: float = 0.0        # stop price of the currently placed OCO
 
     def value_net(self, price: float, fee_rate: float) -> float:
         return self.qty * price * (1.0 - fee_rate)
@@ -308,6 +311,10 @@ class RiskEngine:
             e.append("stop_loss_pct должен быть в (0; 50)")
         if not (0 < p.take_profit_pct < 500):
             e.append("take_profit_pct должен быть в (0; 500)")
+        min_tp = 3 * 2 * self.fee_rate * 100  # TP must cover the round-trip fees with a margin
+        if p.take_profit_pct <= min_tp:
+            e.append(f"take_profit_pct={p.take_profit_pct} слишком мал: должен быть > {min_tp:.2f}% "
+                     f"(3× комиссия туда-обратно)")
         return e
 
     def check_start(self, p: SessionParams, free_usdt: float | None, daily: DailyStats,

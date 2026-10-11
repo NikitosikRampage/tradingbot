@@ -73,7 +73,10 @@ DEFAULTS: dict[str, Any] = {
         "tick_interval_sec": 1.0,
         "strategy": {"ema_fast": 50, "ema_slow": 200, "rsi_period": 14,
                      "rsi_pullback": 35, "rsi_max_entry": 60},
+        "protections": {"enabled": False},
+        "exits": {},
     },
+    "pairlist": {"enabled": False},
     "session_defaults": SessionParams().to_dict(),
     "hard_caps": HardCaps().__dict__,
     "daily_caps": DailyCaps().__dict__,
@@ -190,6 +193,15 @@ def load_config(path: Path | str | None = None, root: Path | None = None,
         errs = RiskEngine(caps, daily).validate_params(sched)
         if errs:
             raise ConfigError("schedule.params нарушают hard_caps: " + "; ".join(errs))
+    from .exits import ExitConfig
+    from .pairlist import PairlistConfig
+    from .protections import ProtectionConfig
+    try:
+        ProtectionConfig.from_dict(raw["trader"].get("protections"))
+        ExitConfig.from_dict(raw["trader"].get("exits"))
+        PairlistConfig.from_dict(raw.get("pairlist"))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(str(exc)) from exc
     symbols = [s.upper() for s in raw["symbols"]]
     for s in symbols:
         if not s.endswith("/USDT"):

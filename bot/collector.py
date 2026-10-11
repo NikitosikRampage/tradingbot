@@ -63,7 +63,7 @@ class Collector:
         self.timeframes: list[str] = list(c["timeframes"])
         self.history: dict[str, int] = dict(c["history"])
         self.ping_interval = float(c["ping_interval_sec"])
-        self.symbols = cfg.symbols
+        self.symbols = list(cfg.symbols)
         self.on_tick: list[TickCallback] = []
         self.on_candle_closed: list[CandleCallback] = []
         self._forming: dict[tuple[str, str], list[float]] = {}
@@ -73,15 +73,28 @@ class Collector:
         self.backfilled_once = asyncio.Event()
 
     # ------------------------------------------------------------------ public
+    def _ticker_args(self) -> list[dict[str, str]]:
+        return [{"channel": "tickers", "instId": inst_id(s)} for s in self.symbols]
+
+    def _candle_args(self) -> list[dict[str, str]]:
+        return [{"channel": WS_CHANNEL[tf], "instId": inst_id(s)}
+                for s in self.symbols for tf in self.timeframes]
+
     async def run(self) -> None:
-        ticker_args = [{"channel": "tickers", "instId": inst_id(s)} for s in self.symbols]
-        candle_args = [{"channel": WS_CHANNEL[tf], "instId": inst_id(s)}
-                       for s in self.symbols for tf in self.timeframes]
         await asyncio.gather(
-            self._ws_loop("public", self.cfg["exchange"]["ws_public"], ticker_args),
-            self._ws_loop("business", self.cfg["exchange"]["ws_business"], candle_args),
+            self._ws_loop("public", self.cfg["exchange"]["ws_public"], self._ticker_args),
+            self._ws_loop("business", self.cfg["exchange"]["ws_business"], self._candle_args),
             self._maintenance(),
         )
+
+    async def set_symbols(self, symbols: list[str]) -> None:
+        """Change the subscribed symbols (dynamic pairlist): reconnect -> resubscribe + backfill."""
+        new = list(dict.fromkeys(symbols))
+        if set(new) == set(self.symbols):
+            return
+        log.info("Подписки: %s -> %s", ",".join(self.symbols), ",".join(new))
+        self.symbols = new
+        await self.force_reconnect()
 
     async def force_reconnect(self) -> None:
         """Called after the computer wakes up from sleep."""
@@ -120,9 +133,10 @@ class Collector:
             self._last_closed[(sym, tf)] = int(closed[-1][0])
             log.info("backfill %s %s: %d свечей", sym, tf, len(closed))
 
-    async def _ws_loop(self, name: str, url: str, args: list[dict[str, str]]) -> None:
+    async def _ws_loop(self, name: str, url: str, args_fn: Callable[[], list[dict[str, str]]]) -> None:
         backoff = 1.0
         while True:
+            args = args_fn()
             try:
                 async with websockets.connect(url, ping_interval=None, open_timeout=20,
                                               close_timeout=5, max_size=2 ** 22) as ws:

@@ -62,6 +62,12 @@ class Database:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(trades)").fetchall()}
+        if "exit_kind" not in cols:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN exit_kind TEXT")
 
     def close(self) -> None:
         with self.lock:

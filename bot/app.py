@@ -14,6 +14,7 @@ from .db import Database
 from .exchange import Exchange
 from .health import Health
 from .notifier import Notifier
+from .pairlist import PairlistConfig, PairlistService, PairSelector
 from .scheduler import Scheduler
 from .trader import Trader
 
@@ -34,6 +35,12 @@ class App:
         self.analytics = Analytics(cfg, self.db, self.market, self.notifier.send)
         self.trader = Trader(cfg, self.db, self.ex, self.market, self.health, self.notifier.send)
         self.scheduler = Scheduler(cfg, self.db, self.analytics, self.trader)
+        pl_cfg = PairlistConfig.from_dict(cfg.raw.get("pairlist"))
+        position_usdt = cfg.session_defaults.budget_usdt * cfg.session_defaults.position_size_pct / 100
+        self.pairlist = PairlistService(pl_cfg, self.db, PairSelector(pl_cfg, self.ex.public, position_usdt),
+                                        self.notifier.send, cfg.symbols, on_change=self._on_pairs_changed)
+        self.trader.trading_symbols = self.pairlist.symbols
+        self.collector.symbols = self._watch_symbols()
         self.collector.on_tick.append(self.alerts.on_tick)
         self.collector.on_candle_closed.append(self.alerts.on_candle_closed)
         self.collector.on_candle_closed.append(self.trader.on_candle_closed)
@@ -48,6 +55,14 @@ class App:
         self.tasks: list[asyncio.Task[Any]] = []
 
     # ------------------------------------------------------------------ helpers
+    def _watch_symbols(self) -> list[str]:
+        """Monitoring list + current trading pairs + symbols with open positions."""
+        held = list(self.trader.state.positions) if self.trader.state else []
+        return list(dict.fromkeys([*self.cfg.symbols, *self.pairlist.symbols(), *held]))
+
+    async def _on_pairs_changed(self, pairs: list[str]) -> None:
+        await self.collector.set_symbols(self._watch_symbols())
+
     async def _supervise(self, name: str, factory: Callable[[], Awaitable[Any]]) -> None:
         """Keep a long-running coroutine alive: restart with backoff on unexpected errors."""
         backoff = 2.0
@@ -133,6 +148,9 @@ class App:
             await asyncio.sleep(1)
         await self._retry_forever("restore", self.trader.restore)
 
+        # restored positions may be on pairs that are no longer in the list -> keep them subscribed
+        await self.collector.set_symbols(self._watch_symbols())
+        spawn("pairlist", self.pairlist.run)
         spawn("trader", self.trader.run)
         spawn("scheduler", self.scheduler.run)
         b = self.trader.blockers()

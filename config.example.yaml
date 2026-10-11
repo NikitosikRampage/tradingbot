@@ -56,6 +56,45 @@ trader:
   tick_interval_sec: 1
   strategy: {ema_fast: 50, ema_slow: 200, rsi_period: 14, rsi_pullback: 35, rsi_max_entry: 60}
 
+  # Защиты входа (как Protections во Freqtrade). Только БЛОКИРУЮТ входы, лимиты сессии не ослабляют.
+  # Выключены, пока scripts/evaluate_improvements.py не покажет улучшение out-of-sample на реальной истории.
+  protections:
+    enabled: false
+    cooldown_minutes: 0              # CooldownPeriod: пауза по паре после любого выхода
+    stoploss_guard: {enabled: false, lookback_hours: 24, trade_limit: 2, stop_minutes: 360, only_per_pair: false}
+    low_profit_pairs: {enabled: false, lookback_hours: 72, trade_limit: 2, required_profit_pct: 0, stop_minutes: 1440}
+    max_drawdown: {enabled: false, lookback_hours: 72, trade_limit: 3, max_drawdown_usdt: 1.0, stop_minutes: 720}
+
+  # Барьеры выхода (triple barrier, как PositionExecutor в Hummingbot). Стоп только поднимается.
+  exits:
+    trailing_enabled: false
+    trailing_activation_pct: 2.0
+    trailing_distance_pct: 1.5
+    breakeven_enabled: false
+    breakeven_activation_pct: 1.5
+    time_limit_hours: 0              # 0 = выкл
+
+# Динамический отбор пар OKX spot /USDT (как Pairlists во Freqtrade).
+# Если enabled: false — торгуются symbols. Проверить выбор вручную: python scripts/select_pairs.py
+pairlist:
+  enabled: false
+  refresh_hours: 6
+  max_pairs: 4                       # 3–5
+  candidates: 25                     # сколько самых ликвидных пар проверять детально
+  min_quote_volume_usdt: 20000000    # суточный объём
+  max_spread_pct: 0.10
+  depth_band_pct: 1.0                # глубина стакана в пределах ±1% от середины
+  min_depth_usdt: 50000              # на каждую сторону
+  atr_period: 14                     # ATR% по дневным свечам
+  min_atr_pct: 2.0
+  max_atr_pct: 12.0
+  min_listing_days: 90
+  max_change_24h_pct: 25             # признаки памп/дампа
+  max_volume_spike: 4.0              # объём 24ч / медиана за 30 дней
+  max_daily_range_pct: 35
+  whitelist: []                      # проверяются первыми (но всё равно фильтруются)
+  blacklist: []                      # можно с масками: ["*DOG*/USDT"]
+
 # Параметры сессии по умолчанию (/session_start переопределяет их)
 session_defaults:
   budget_usdt: 10

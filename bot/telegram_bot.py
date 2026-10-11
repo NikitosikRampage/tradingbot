@@ -25,6 +25,7 @@ HELP = """Команды:
 /stop — АВАРИЙНО: закрыть всё и выключить trader
 /trader_on, /trader_off — включить/выключить trader
 /confirm_live <код> — подтверждение реального счёта
+/pairs — текущие торгуемые пары и почему, /protections — активные блокировки входов
 /digest, /weekly — отчёты сейчас
 /mute <мин> — заглушить алерты, /health — heartbeat компонентов"""
 
@@ -53,7 +54,7 @@ class TelegramBot:
             "resume": self.cmd_resume, "stop": self.cmd_stop, "trader_on": self.cmd_trader_on,
             "trader_off": self.cmd_trader_off, "confirm_live": self.cmd_confirm_live,
             "digest": self.cmd_digest, "weekly": self.cmd_weekly, "mute": self.cmd_mute,
-            "health": self.cmd_health,
+            "health": self.cmd_health, "pairs": self.cmd_pairs, "protections": self.cmd_protections,
         }
         for name, fn in cmds.items():
             self.application.add_handler(CommandHandler(name, self._guard(fn), filters=only_me))
@@ -183,6 +184,15 @@ class TelegramBot:
             minutes = 60.0
         self.core.alerts.muted_until = time.time() + minutes * 60
         await self._reply(u, f"🔕 Алерты заглушены на {minutes:.0f} мин." if minutes > 0 else "🔔 Алерты включены.")
+
+    async def cmd_pairs(self, u: Update, c: ContextTypes.DEFAULT_TYPE) -> None:
+        if c.args and c.args[0].lower() == "refresh" and self.core.pairlist.cfg.enabled:
+            await self._reply(u, "Пересчитываю список пар...")
+            await self.core.pairlist.refresh()
+        await self._reply(u, self.core.pairlist.text())
+
+    async def cmd_protections(self, u: Update, c: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._reply(u, self.core.trader.protections_text())
 
     async def cmd_health(self, u: Update, c: ContextTypes.DEFAULT_TYPE) -> None:
         h = self.core.health

@@ -317,3 +317,47 @@ def test_failed_buy_is_recorded(env):
         tr.generate_signal = orig
     assert db.trades()[0]["status"] == "failed" and not t.state.positions
     assert t.state.status == SessionStatus.ACTIVE
+
+
+def test_trailing_stop_moves_oco_up_and_exit_kind_recorded(env):
+    cfg, db, ex, market, msgs, make = env
+    cfg.raw["trader"]["exits"] = {"trailing_enabled": True, "trailing_activation_pct": 2,
+                                  "trailing_distance_pct": 1.5}
+    t = make()
+
+    async def scenario():
+        await t.start_session({})
+        pos = await open_position(t, ex, market)
+        first_algo = pos.algo_id
+        set_price(market, ex, "BTC/USDT", 103.0)
+        await t.tick()
+        assert pos.stop_loss == pytest.approx(103 * 0.985)
+        assert pos.algo_id != first_algo and ex.algos[first_algo] == "canceled"   # OCO moved up
+        set_price(market, ex, "BTC/USDT", 101.0)
+        await t.tick()
+
+    run(scenario())
+    tr = db.trades("status='closed'")[0]
+    assert tr["exit_kind"] == "trailing_stop" and tr["pnl_usdt"] > 0
+
+
+def test_protection_blocks_entry_after_stoplosses(env):
+    cfg, db, ex, market, msgs, make = env
+    cfg.raw["trader"]["protections"] = {"enabled": True, "stoploss_guard": {
+        "enabled": True, "lookback_hours": 24, "trade_limit": 1, "stop_minutes": 120}}
+    t = make()
+    run(t.start_session({}))
+    run(open_position(t, ex, market))
+    set_price(market, ex, "BTC/USDT", 97.0)
+    run(t.tick())   # stop-loss
+    from bot.strategy import Signal
+    import bot.trader as tr
+    orig = tr.generate_signal
+    tr.generate_signal = lambda *a, **k: Signal("ETH/USDT", 50, "test", 1, 1, 30, 36)
+    try:
+        set_price(market, ex, "ETH/USDT", 50)
+        run(t.try_enter("ETH/USDT"))
+    finally:
+        tr.generate_signal = orig
+    assert "ETH/USDT" not in t.state.positions
+    assert "StoplossGuard" in t.protections_text()

@@ -20,7 +20,9 @@ from .config import Config
 from .db import Database
 from .exchange import Exchange, new_client_id
 from .health import Health
+from .exits import ExitConfig, check_exit, raise_stop
 from .marketdata import closes, closes_4h
+from .protections import ClosedTrade, ProtectionConfig, compute_locks, entry_blocked
 from .risk import (STOP_REASON_RU, Action, DailyStats, Position, SessionParams, SessionState,
                    SessionStatus, StopReason)
 from .strategy import StrategyParams, generate_signal
@@ -69,6 +71,11 @@ class Trader:
         self.stale_after = float(cfg["collector"]["stale_after_sec"])
         self.tick_interval = float(cfg["trader"]["tick_interval_sec"])
         self.exchange_sl_tp = bool(cfg["trader"]["exchange_side_sl_tp"])
+        self.exits = ExitConfig.from_dict(cfg["trader"].get("exits"))
+        self.protections = ProtectionConfig.from_dict(cfg["trader"].get("protections"))
+        # replaced by the dynamic pairlist when it is enabled (see app.py)
+        self.trading_symbols: Callable[[], list[str]] = lambda: list(cfg.symbols)
+        self._oco_refresh_at: dict[str, float] = {}
         self.stop_file = cfg.path("stop_file")
         self.state: SessionState | None = None
         self.lock = asyncio.Lock()
@@ -346,7 +353,7 @@ class Trader:
 
     # ================================================================== entries
     async def on_candle_closed(self, symbol: str, tf: str, row: list[float]) -> None:
-        if tf != "1h" or self.state is None or symbol not in self.cfg.symbols:
+        if tf != "1h" or self.state is None or symbol not in self.trading_symbols():
             return
         await self.try_enter(symbol)
 
@@ -360,6 +367,10 @@ class Trader:
                                                     data_fresh=self.market.fresh(symbol, self.stale_after))
             if not ok:
                 log.debug("entry %s blocked: %s", symbol, reason)
+                return
+            blocked, why = entry_blocked(self.closed_trades(now), self.protections, symbol, now)
+            if blocked:
+                log.info("entry %s blocked by protection: %s", symbol, why)
                 return
             sig = generate_signal(symbol, closes(self.db, symbol, "1h", 300),
                                   closes_4h(self.db, symbol, self.strategy.ema_slow + 60), self.strategy)
@@ -398,11 +409,13 @@ class Trader:
         pos = Position(symbol=symbol, qty=qty, entry_price=entry, cost_usdt=cost,
                        entry_fee_usdt=fill.fee_usdt, stop_loss=entry * (1 - p.stop_loss_pct / 100),
                        take_profit=entry * (1 + p.take_profit_pct / 100), opened_at=time.time(),
-                       trade_id=trade_id)
+                       trade_id=trade_id, highest=entry)
+        pos.initial_stop = pos.stop_loss
         self.engine.record_open(st, pos)
         if self.exchange_sl_tp:
             try:
                 pos.algo_id = await self.ex.place_oco(symbol, qty, pos.take_profit, pos.stop_loss)
+                pos.oco_stop = pos.stop_loss
             except Exception as exc:  # noqa: BLE001
                 log.warning("OCO %s: %s", symbol, exc)
                 self.notify(f"⚠️ {symbol}: не удалось выставить OCO на бирже ({exc}). SL/TP контролирует бот.")
@@ -420,16 +433,63 @@ class Trader:
         st = self.state
         if st is None:
             return
+        now = time.time()
         for sym, pos in list(st.positions.items()):
             price = prices.get(sym)
             if price is None:
                 continue
-            if price <= pos.stop_loss:
-                await self._close_position(sym, f"стоп-лосс ({price:.6g} ≤ {pos.stop_loss:.6g})")
-            elif price >= pos.take_profit:
-                await self._close_position(sym, f"тейк-профит ({price:.6g} ≥ {pos.take_profit:.6g})")
+            hit = check_exit(pos, price, now, self.exits)
+            if hit is not None:
+                await self._close_position(sym, hit[1], hit[0])
+                continue
+            if raise_stop(pos, price, self.exits, self.engine.fee_rate):
+                self.persist()
+                await self._refresh_oco(sym)
 
-    async def _close_position(self, sym: str, reason: str) -> bool:
+    async def _refresh_oco(self, sym: str) -> None:
+        """Move the exchange-side OCO up after the trailing/break-even stop was raised."""
+        st = self.state
+        if st is None or sym not in st.positions or not self.exchange_sl_tp:
+            return
+        pos = st.positions[sym]
+        if not pos.algo_id or pos.stop_loss < pos.oco_stop * 1.003:
+            return
+        if time.time() - self._oco_refresh_at.get(sym, 0) < 30:
+            return
+        self._oco_refresh_at[sym] = time.time()
+        try:
+            await self.ex.cancel_algo(sym, pos.algo_id)
+            pos.algo_id = None
+            await asyncio.sleep(0.5)
+            if await self.ex.base_total(sym) < pos.qty * 0.95:
+                await self._reconcile_position(sym)  # OCO fired before we could cancel it
+                return
+            pos.algo_id = await self.ex.place_oco(sym, pos.qty, pos.take_profit, pos.stop_loss)
+            pos.oco_stop = pos.stop_loss
+        except Exception as exc:  # noqa: BLE001
+            log.warning("OCO refresh %s: %s", sym, exc)
+            self.notify(f"⚠️ {sym}: не удалось переставить OCO ({exc}). Стоп {pos.stop_loss:.6g} ведёт бот.")
+        self.persist()
+
+    def closed_trades(self, now: float | None = None) -> list[ClosedTrade]:
+        """Closed trades of ALL sessions in the protections lookback window."""
+        now = now or time.time()
+        since = now - self.protections.max_lookback_sec
+        return [ClosedTrade(r["symbol"], float(r["exit_ts"]), float(r["pnl_usdt"] or 0),
+                            float(r["pnl_pct"] or 0), r["exit_kind"] or "other")
+                for r in self.db.trades("status='closed' AND exit_ts>=?", (since,))]
+
+    def protections_text(self) -> str:
+        if not self.protections.enabled:
+            return "Защиты (protections) выключены в config.yaml."
+        now = time.time()
+        locks = compute_locks(self.closed_trades(now), self.protections, now)
+        if not locks:
+            return "🛡 Активных блокировок нет."
+        return "🛡 Активные блокировки:\n" + "\n".join(
+            f"• {lk.reason} — до {datetime.fromtimestamp(lk.until, self.cfg.tz):%d.%m %H:%M}" for lk in locks)
+
+    async def _close_position(self, sym: str, reason: str, kind: str = "session") -> bool:
         st = self.state
         if st is None or sym not in st.positions:
             return True
@@ -457,11 +517,11 @@ class Trader:
             self.notify(f"❌ Продажа {sym} не исполнена ({fill.status}).")
             return False
         proceeds = fill.quote_amount - fill.fee_quote - fill.fee_base * fill.avg_price
-        self._finalize_close(sym, fill.avg_price, proceeds, fill.fee_usdt, reason)
+        self._finalize_close(sym, fill.avg_price, proceeds, fill.fee_usdt, reason, kind)
         return True
 
     def _finalize_close(self, sym: str, exit_price: float, proceeds_net: float, exit_fee: float,
-                        reason: str) -> None:
+                        reason: str, kind: str = "other") -> None:
         st = self.state
         assert st is not None
         pos = st.positions[sym]
@@ -470,7 +530,7 @@ class Trader:
         if pos.trade_id:
             self.db.update_trade(pos.trade_id, status="closed", exit_ts=time.time(), exit_price=exit_price,
                                  proceeds_usdt=proceeds_net, exit_fee_usdt=exit_fee, exit_reason=reason,
-                                 pnl_usdt=pnl, pnl_pct=pct)
+                                 pnl_usdt=pnl, pnl_pct=pct, exit_kind=kind)
         self.persist()
         snap = self.engine.pnl(st, self.market.prices())
         icon = "✅" if pnl > 0 else "🔴"
@@ -491,6 +551,7 @@ class Trader:
                 if state in ("canceled", "order_failed"):
                     try:
                         pos.algo_id = await self.ex.place_oco(sym, pos.qty, pos.take_profit, pos.stop_loss)
+                        pos.oco_stop = pos.stop_loss
                         self.persist()
                     except Exception as exc:  # noqa: BLE001
                         log.warning("re-place OCO %s: %s", sym, exc)
@@ -506,7 +567,9 @@ class Trader:
             exit_price = self.market.price(sym) or pos.entry_price
             exit_fee = pos.qty * exit_price * self.engine.fee_rate
             proceeds = pos.qty * exit_price - exit_fee
-        self._finalize_close(sym, exit_price, proceeds, exit_fee, "закрыта на бирже (OCO SL/TP или вручную)")
+        kind = "take_profit" if exit_price >= pos.take_profit * 0.99 else (
+            "trailing_stop" if pos.stop_loss > pos.initial_stop > 0 else "stop_loss")
+        self._finalize_close(sym, exit_price, proceeds, exit_fee, "закрыта на бирже (OCO SL/TP или вручную)", kind)
         return True
 
     async def _poll_algos(self) -> None:
@@ -543,6 +606,15 @@ class Trader:
                  f"Сделок: {st.trades_closed} (побед {st.wins}, поражений {st.losses}, винрейт {st.winrate * 100:.0f}%)",
                  f"PnL (с комиссиями): {st.realized_pnl:+.4f} USDT ({st.realized_pnl / st.params.budget_usdt * 100:+.2f}% бюджета)",
                  f"Комиссии: {st.fees_paid:.4f} USDT, макс. просадка: {st.max_drawdown:.4f} USDT, пик PnL: {st.peak_pnl:+.4f}"]
+        pnls = [float(t["pnl_usdt"] or 0) for t in trades]
+        gains, losses = sum(x for x in pnls if x > 0), -sum(x for x in pnls if x <= 0)
+        if pnls:
+            pf = "∞" if losses == 0 else f"{gains / losses:.2f}"
+            kinds: dict[str, int] = {}
+            for t in trades:
+                kinds[t["exit_kind"] or "other"] = kinds.get(t["exit_kind"] or "other", 0) + 1
+            lines.append(f"Profit factor {pf}, ожидание/сделку {sum(pnls) / len(pnls):+.4f}; выходы: "
+                         + ", ".join(f"{k}={v}" for k, v in kinds.items()))
         for t in trades:
             lines.append(f"• {t['symbol']} {t['entry_price']:.6g}→{t['exit_price']:.6g} "
                          f"{t['pnl_usdt']:+.4f} ({t['exit_reason']})")
