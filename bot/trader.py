@@ -388,6 +388,12 @@ class Trader:
             if free < size:
                 self.notify(f"⚠️ {symbol}: сигнал есть, но свободных USDT ({free:.2f}) меньше размера позиции {size:.2f}.")
                 return
+            price = self.market.price(symbol) or sig.price
+            min_usdt = self.ex.min_amount(symbol) * price * 1.05  # +5%: the buy fee is taken in the coin
+            if size < min_usdt:
+                self.notify(f"⚠️ {symbol}: сигнал есть, но позиция {size:.2f} USDT меньше минимального ордера "
+                            f"OKX ({min_usdt:.2f} USDT). Вход пропущен.")
+                return
             cid = new_client_id()
             trade_id = self.db.insert_trade(session_id=st.session_id, symbol=symbol, mode=self.mode.lower(),
                                             status="pending", client_order_id=cid, entry_ts=now,

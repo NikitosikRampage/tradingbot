@@ -1,7 +1,10 @@
 # Скопируйте в config.yaml и отредактируйте. Отсутствующие ключи берутся из значений по умолчанию.
 timezone: Europe/Moscow
 
-symbols: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT]
+# 16 пар из исследования 2019 → сегодня (IMPROVEMENTS.md, раздел 7). BTC/USDT нужен фильтру режима BTC.
+# Минимальный ордер OKX у всех ≤ 3 USDT (позиция = 30% от бюджета 10). У ETC/USDT низкая ликвидность на OKX.
+symbols: [BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, DOGE/USDT, ADA/USDT, LTC/USDT, LINK/USDT,
+          AVAX/USDT, BCH/USDT, DOT/USDT, TRX/USDT, BNB/USDT, ETC/USDT, XLM/USDT, ZEC/USDT]
 
 paths:
   db: data/bot.db

@@ -147,7 +147,8 @@ Withdraw), Telegram (присылает тестовое сообщение):
 ключ берётся из значений по умолчанию (`bot/config.py`). Ключевые блоки:
 
 ```yaml
-symbols: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT]
+symbols: [BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, DOGE/USDT, ADA/USDT, LTC/USDT, LINK/USDT,
+          AVAX/USDT, BCH/USDT, DOT/USDT, TRX/USDT, BNB/USDT, ETC/USDT, XLM/USDT, ZEC/USDT]   # 16 пар из исследования
 
 alerts:
   price_move: [{pct: 2.0, minutes: 15}, {pct: 4.0, minutes: 60}]

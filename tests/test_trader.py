@@ -33,6 +33,11 @@ class FakeExchange:
     async def free_usdt(self):
         return self.usdt
 
+    min_amounts: dict = {}
+
+    def min_amount(self, symbol):
+        return self.min_amounts.get(symbol, 0.0)
+
     async def market_buy_cost(self, symbol, cost, cid):
         if self.fail_buy:
             raise RuntimeError("boom")
@@ -382,3 +387,21 @@ def test_atr_stop_is_capped_by_session_stop(env):
     pos = run(scenario())
     assert pos.stop_loss == pytest.approx(100 * 0.98)      # 5% ATR stop capped at the session 2%
     assert pos.take_profit == pytest.approx(106.0)
+
+
+def test_entry_skipped_below_exchange_min_order(env):
+    cfg, db, ex, market, msgs, make = env
+    t = make()
+    run(t.start_session({"budget_usdt": 10}))           # position = 3 USDT
+    ex.min_amounts = {"BCH/USDT": 0.01}                 # 0.01 BCH * 300 = 3 USDT * 1.05 > 3
+    from bot.strategy import Signal
+    import bot.trader as tr
+    orig = tr.generate_signal
+    tr.generate_signal = lambda *a, **k: Signal("BCH/USDT", 300, "test", 1, 1, 30, 36)
+    try:
+        set_price(market, ex, "BCH/USDT", 300.0)
+        run(t.try_enter("BCH/USDT"))
+    finally:
+        tr.generate_signal = orig
+    assert not t.state.positions and db.trades() == []
+    assert any("минимального ордера" in m for m in msgs)

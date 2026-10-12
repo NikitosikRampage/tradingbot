@@ -23,7 +23,9 @@ class ConfigError(Exception):
 
 DEFAULTS: dict[str, Any] = {
     "timezone": "Europe/Moscow",
-    "symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"],
+    # the 16 pairs of the 2019 → today research (IMPROVEMENTS.md, section 7)
+    "symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "LTC/USDT", "LINK/USDT",
+                "AVAX/USDT", "BCH/USDT", "DOT/USDT", "TRX/USDT", "BNB/USDT", "ETC/USDT", "XLM/USDT", "ZEC/USDT"],
     "paths": {"db": "data/bot.db", "logs": "logs", "stop_file": "STOP", "shutdown_file": "SHUTDOWN",
               "heartbeat_file": "data/heartbeat.json"},
     "logging": {"level": "INFO", "max_bytes": 10_000_000, "backup_count": 10},
