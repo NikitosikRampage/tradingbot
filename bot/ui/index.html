@@ -116,6 +116,7 @@ pre.report { margin: 0; white-space: pre-wrap; font: 13px/1.5 var(--font); color
   <h1>OKX Bot</h1>
   <span id="mode" class="badge">—</span>
   <span id="trader" class="badge">—</span>
+  <span id="strat" class="badge" title="Режим стратегии (меняется в «Настройках»)">—</span>
   <span id="conn" class="badge"><span class="dot"></span><span>связь…</span></span>
   <span class="spacer"></span>
   <button class="btn" id="btn-trader" type="button">Включить trader</button>
@@ -262,6 +263,16 @@ pre.report { margin: 0; white-space: pre-wrap; font: 13px/1.5 var(--font); color
 
   <!-- ======================================================== SETTINGS -->
   <section data-panel="settings" class="panel-grid" hidden>
+    <div class="card" id="smode-card"><h2>Режим стратегии</h2>
+      <p class="note" id="smode-live" hidden>На реальном счёте доступна только стратегия из config.yaml.</p>
+      <form id="smode-box" class="panel-grid" style="gap:8px">
+        <label class="row"><input type="radio" name="smode" value="config"> <span><b>Из config.yaml</b> — вход на закрытии часовой свечи (несколько сделок в неделю). Лучший результат в проверках (−2.3 USDT за отложенный период), но тоже в минусе.</span></label>
+        <label class="row"><input type="radio" name="smode" value="scalp_revert"> <span><b>Скальпинг 5m: возврат к среднему</b> — ~7 сделок в день. Бэктест за 4 мес.: −9.5 USDT (1175 сделок).</span></label>
+        <label class="row"><input type="radio" name="smode" value="scalp_breakout"> <span><b>Скальпинг 5m: пробой с объёмом</b> — ~17 сделок в день. Бэктест за 4 мес.: −26.0 USDT (2994 сделки).</span></label>
+        <p class="note">Скальпинг — только DEMO: в бэктесте оба варианта убыточны из-за комиссий (без комиссий — около нуля). Позиция закрывается не позже чем через 1 ч. Лимиты сессии, hard_caps и «Стоп» действуют как обычно. Переключать можно, когда нет открытых позиций.</p>
+        <div class="row"><button class="btn primary" type="submit">Применить</button></div>
+      </form>
+    </div>
     <div class="cols">
       <div class="card"><h2>Стратегия</h2><dl class="kv" id="st-strategy"></dl></div>
       <div class="card"><h2>Параметры сессии по умолчанию</h2><dl class="kv" id="st-defaults"></dl></div>
@@ -444,6 +455,12 @@ async function refreshState() {
   const mode = $("#mode"); mode.textContent = s.mode === "LIVE" ? "РЕАЛЬНЫЙ СЧЁТ" : "DEMO"; mode.className = "badge " + (s.mode === "LIVE" ? "live" : "demo");
   const tr = $("#trader"); tr.textContent = s.trader_enabled ? (s.paused ? "trader: пауза" : "trader: ВКЛ") : "trader: выкл"; tr.className = "badge " + (s.trader_enabled ? (s.paused ? "warn" : "on") : "off");
   $("#btn-trader").textContent = s.trader_enabled ? "Выключить trader" : "Включить trader";
+  const scalp = s.strategy.signal_tf === "5m", st = $("#strat");
+  st.textContent = scalp ? "скальпинг 5m" : "стратегия 1h"; st.className = "badge " + (scalp ? "warn" : "off");
+  const pr = s.session_presets || {};
+  $("#start-note").textContent = "Пустые поля берутся из config.yaml" + (pr.duration_hours ? ` (в режиме скальпинга: длительность ${pr.duration_hours} ч, до ${pr.max_trades} сделок, без входов в последний ${pr.no_entry_last_hours} ч)` : "") + ". Значения выше потолков hard_caps отклоняются.";
+  for (const r of $$('input[name="smode"]')) if (document.activeElement !== r && !r.dataset.touched) r.checked = r.value === s.strategy_mode;
+  $("#smode-box").hidden = s.live; $("#smode-live").hidden = !s.live;
   $("#live-box").hidden = !(s.live && !s.live_confirmed && s.live_code);
   if (s.live_code) $("#live-text").textContent = `В .env включён реальный счёт. Торговля заблокирована, пока вы не введёте код ${s.live_code}. Если это ошибка — выключите OKX_LIVE_TRADING и перезапустите бота.`;
   const bl = $("#blockers-list"); bl.replaceChildren(...s.blockers.map(b => Object.assign(document.createElement("li"), { textContent: b })));
@@ -559,7 +576,7 @@ function renderSettings() {
   kvFill($("#st-strategy"), [["Вход", modes[s.entry_mode] || s.entry_mode], ["Проверка входа", `на закрытии каждой ${s.signal_tf}-свечи`], ["Фильтр тренда", `EMA${s.ema_fast} > EMA${s.ema_slow} на ${s.trend_tf}`],
     ["Фильтр BTC", s.btc_regime ? "да" : "нет"], ["Выходы", s.entry_mode.startsWith("scalp") ? `SL ${s.scalp_sl_atr}×ATR, TP ${s.scalp_tp_atr}×ATR` : s.exit_mode === "atr" ? `SL ${s.atr_sl_mult}×ATR, TP ${s.atr_tp_mult}×ATR` : "SL/TP сессии"],
     ["Лимит удержания", e.time_limit_hours ? `${e.time_limit_hours} ч` : "нет"], ["Трейлинг / безубыток", `${e.trailing_enabled ? "да" : "нет"} / ${e.breakeven_enabled ? "да" : "нет"}`]]);
-  const d = STATE.defaults; kvFill($("#st-defaults"), [["Бюджет", `${d.budget_usdt} USDT`], ["Длительность", `${d.duration_hours} ч`], ["Макс. убыток", d.max_loss_usdt == null ? "—" : `${d.max_loss_usdt} USDT`], ["Цель", d.profit_target_usdt == null ? "не задана" : `${d.profit_target_usdt} USDT`],
+  const d = { ...STATE.defaults, ...(STATE.session_presets || {}) }; kvFill($("#st-defaults"), [["Бюджет", `${d.budget_usdt} USDT`], ["Длительность", `${d.duration_hours} ч`], ["Макс. убыток", d.max_loss_usdt == null ? "—" : `${d.max_loss_usdt} USDT`], ["Цель", d.profit_target_usdt == null ? "не задана" : `${d.profit_target_usdt} USDT`],
     ["Макс. сделок", d.max_trades], ["Размер позиции", `${d.position_size_pct}% бюджета`], ["Позиций одновременно", d.max_open_positions], ["Без входов в конце", `${d.no_entry_last_hours} ч`], ["По окончании", d.on_session_end === "close_all" ? "закрыть всё" : "довести до SL/TP"]]);
   const c = STATE.hard_caps, dc = STATE.daily_caps; kvFill($("#st-caps"), [["Бюджет сессии ≤", `${c.max_budget_usdt} USDT`], ["Убыток сессии ≤", `${c.max_loss_usdt} USDT`], ["Длительность ≤", `${c.max_duration_hours} ч`], ["Сделок за сессию ≤", c.max_trades_per_session],
     ["Сумма бюджетов за день ≤", `${dc.daily_budget_cap_usdt} USDT`], ["Убыток за день ≤", `${dc.daily_loss_cap_usdt} USDT`]]);
@@ -587,6 +604,9 @@ $("#btn-end").addEventListener("click", () => act("/api/session/end", {}));
 $("#btn-digest").addEventListener("click", () => act("/api/report", { kind: "digest" }).then(refreshEvents));
 $("#btn-mute").addEventListener("click", () => act("/api/mute", { minutes: 60 }));
 $("#btn-pairs").addEventListener("click", () => act("/api/pairs/refresh", {}));
+$$('input[name="smode"]').forEach(r => r.addEventListener("change", () => $$('input[name="smode"]').forEach(x => x.dataset.touched = "1")));
+$("#smode-box").addEventListener("submit", (e) => { e.preventDefault(); const r = $('input[name="smode"]:checked'); if (!r) return;
+  act("/api/strategy", { mode: r.value }).then(() => { $$('input[name="smode"]').forEach(x => delete x.dataset.touched); renderSettings(); }); });
 $("#start-form").addEventListener("submit", (e) => { e.preventDefault(); const params = {}; new FormData(e.target).forEach((v, k) => { if (String(v).trim() !== "") params[k] = String(v).trim(); }); act("/api/session/start", { params }).then(refreshEvents); });
 $("#set-form").addEventListener("submit", (e) => { e.preventDefault(); act("/api/session/set", { name: $("#set-name").value, value: $("#set-value").value }); });
 $("#live-form").addEventListener("submit", (e) => { e.preventDefault(); act("/api/confirm_live", { code: $("#live-code").value }); });

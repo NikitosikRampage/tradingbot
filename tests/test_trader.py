@@ -428,3 +428,34 @@ def test_scalp_mode_is_demo_only_and_triggers_on_5m(env):
     assert calls == ["ETH/USDT"]
     ex.live = True   # the same mode on a real account is blocked
     assert any("только на DEMO" in b for b in t.blockers())
+
+
+def test_strategy_mode_switch_demo_only_with_session_presets(env):
+    cfg, db, ex, market, msgs, make = env
+    t = make()
+    assert t.strategy_mode == "config" and t.strategy.signal_tf == "1h"
+    msg = run(t.set_strategy_mode("scalp_breakout"))
+    assert msg.startswith("✅"), msg
+    assert t.strategy.entry_mode == "scalp_breakout" and t.strategy.signal_tf == "5m" and not t.strategy.btc_regime
+    assert t.exits.time_limit_hours == 1.0 and t.base_exits.time_limit_hours == cfg["trader"]["exits"]["time_limit_hours"]
+    # survives a restart
+    t2 = make()
+    assert t2.strategy_mode == "scalp_breakout" and t2.strategy.signal_tf == "5m"
+    # session presets fill only what is not given, within hard caps
+    run(t2.start_session({"budget_usdt": 10, "max_trades": 20}))
+    p = t2.state.params
+    assert p.duration_hours == min(24, cfg.hard_caps.max_duration_hours) and p.no_entry_last_hours == 1 and p.max_trades == 20
+    # cannot switch while a position is open
+    run(open_position(t2, ex, market, "ETH/USDT"))
+    assert run(t2.set_strategy_mode("config")).startswith("❌") and t2.strategy_mode == "scalp_breakout"
+
+
+def test_strategy_mode_switch_refused_on_live(env):
+    cfg, db, ex, market, msgs, make = env
+    t = make()
+    run(t.set_strategy_mode("scalp_revert"))
+    ex.live = True
+    t_live = make()
+    assert t_live.strategy_mode == "config" and t_live.strategy.signal_tf == "1h"   # stored choice ignored on live
+    assert run(t_live.set_strategy_mode("scalp_revert")).startswith("❌")
+    assert run(t_live.set_strategy_mode("bogus")).startswith("❌")

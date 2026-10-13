@@ -191,3 +191,15 @@ def test_events_are_trimmed_by_time_order(tmp_path):
     assert len(out) == 3 and all(out[i]["id"] < out[i + 1]["id"] for i in range(2))
     assert out[-1]["ts"] <= time.time()
     db.close()
+
+
+def test_strategy_switch_via_api(tmp_path):
+    async def fn(app, c, h):
+        r = await (await c.post("/api/strategy", json={"mode": "scalp_revert"}, headers=h)).json()
+        assert r["ok"], r["message"]
+        st = await (await c.get("/api/state", headers=h)).json()
+        assert st["strategy_mode"] == "scalp_revert" and st["strategy"]["signal_tf"] == "5m"
+        assert st["session_presets"]["no_entry_last_hours"] == 1
+        r = await (await c.post("/api/strategy", json={"mode": "config"}, headers=h)).json()
+        assert r["ok"] and app.trader.strategy.signal_tf == "1h"
+    call(tmp_path, fn)

@@ -74,6 +74,7 @@ class WebUI:
         r.add_post("/api/session/set", self.post_session_set)
         r.add_post("/api/pause", self.post_pause)
         r.add_post("/api/stop", self.post_stop)
+        r.add_post("/api/strategy", self.post_strategy)
         r.add_post("/api/trader", self.post_trader)
         r.add_post("/api/confirm_live", self.post_confirm_live)
         r.add_post("/api/pairs/refresh", self.post_pairs_refresh)
@@ -167,6 +168,8 @@ class WebUI:
             "trader_enabled": t.enabled, "paused": t.paused, "blockers": t.blockers(), "has_keys": c.ex.can_trade,
             "strategy": {k: getattr(t.strategy, k) for k in t.strategy.__dataclass_fields__} | {
                 "signal_tf": t.strategy.signal_tf, "trend_tf": t.strategy.trend_tf},
+            "strategy_mode": t.strategy_mode, "config_entry_mode": t.base_strategy.entry_mode,
+            "session_presets": t.session_presets(),
             "exits": t.exits.__dict__, "session": session, "prices": prices,
             "health": {k: round(now - v, 1) for k, v in c.health.beats.items()}, "errors": c.health.errors,
             "pairs": {"enabled": c.pairlist.cfg.enabled, "symbols": c.pairlist.symbols(), "updated": c.pairlist.updated_at,
@@ -277,6 +280,11 @@ class WebUI:
         if body.get("confirm") != "STOP":
             return self._msg("Для аварийной остановки подтвердите действие.", False)
         return self._msg(await self.core.trader.emergency_stop("кнопка в интерфейсе"))
+
+    async def post_strategy(self, request: web.Request) -> web.Response:
+        body = await self._body(request)
+        msg = await self.core.trader.set_strategy_mode(str(body.get("mode", "")))
+        return self._msg(msg, msg.startswith("✅"))
 
     async def post_trader(self, request: web.Request) -> web.Response:
         body = await self._body(request)

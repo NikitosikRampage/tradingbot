@@ -34,18 +34,13 @@ from backtest import MIN_FEE, Backtester, build, compute_metrics, load_history, 
 from bot.config import load_config  # noqa: E402
 from bot.exits import ExitConfig  # noqa: E402
 from bot.protections import ProtectionConfig  # noqa: E402
-from bot.strategy import StrategyParams  # noqa: E402
+from bot.strategy import SCALP_PRESETS, SCALP_SESSION, SCALP_TIME_LIMIT_HOURS, StrategyParams  # noqa: E402
 from research import UNIVERSE, _calibrate, exits, metrics_dict, per_pair  # noqa: E402
 
 SLIP = 0.0005
-SESSION = {"duration_hours": 24, "no_entry_last_hours": 1, "max_trades": 50}
-EXITS = {"time_limit_hours": 1}
-VARIANTS: dict[str, dict[str, Any]] = {
-    "scalp_revert": {"entry_mode": "scalp_revert", "bb_period": 20, "bb_k": 2.0, "scalp_rsi_max": 30,
-                     "scalp_sl_atr": 1.5, "scalp_tp_atr": 1.5, "btc_regime": False, "min_atr_pct": 0},
-    "scalp_breakout": {"entry_mode": "scalp_breakout", "scalp_breakout_bars": 12, "scalp_vol_mult": 1.5,
-                       "scalp_sl_atr": 1.0, "scalp_tp_atr": 2.0, "btc_regime": False, "min_atr_pct": 0},
-}
+SESSION = dict(SCALP_SESSION)
+EXITS = {"time_limit_hours": SCALP_TIME_LIMIT_HOURS}
+VARIANTS: dict[str, dict[str, Any]] = SCALP_PRESETS  # the same presets the UI switches to on DEMO
 COSTS = [("Без издержек", 0.0, 0.0), ("Maker 0.08% + проскальзывание 0.02%", 0.0008, 0.0002),
          ("Taker 0.10% + проскальзывание 0.05% (как в проверке)", MIN_FEE, SLIP)]
 

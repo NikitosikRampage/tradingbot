@@ -10,6 +10,7 @@ import json
 import logging
 import secrets as pysecrets
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Callable
 
@@ -25,7 +26,8 @@ from .marketdata import closes, closes_4h
 from .protections import ClosedTrade, ProtectionConfig, compute_locks, entry_blocked
 from .risk import (STOP_REASON_RU, Action, DailyStats, Position, SessionParams, SessionState,
                    SessionStatus, StopReason)
-from .strategy import SCALP_MODES, Signal, StrategyParams, exit_levels, generate_scalp_signal, generate_signal
+from .strategy import (SCALP_MODES, SCALP_PRESETS, SCALP_SESSION, SCALP_TIME_LIMIT_HOURS, Signal, StrategyParams,
+                       exit_levels, generate_scalp_signal, generate_signal)
 
 log = logging.getLogger(__name__)
 
@@ -67,11 +69,13 @@ class Trader:
         self.health = health
         self._notify = notify
         self.engine = cfg.risk_engine()
-        self.strategy = StrategyParams.from_dict(cfg["trader"]["strategy"])
+        self.base_strategy = StrategyParams.from_dict(cfg["trader"]["strategy"])
+        self.strategy = self.base_strategy
         self.stale_after = float(cfg["collector"]["stale_after_sec"])
         self.tick_interval = float(cfg["trader"]["tick_interval_sec"])
         self.exchange_sl_tp = bool(cfg["trader"]["exchange_side_sl_tp"])
-        self.exits = ExitConfig.from_dict(cfg["trader"].get("exits"))
+        self.base_exits = ExitConfig.from_dict(cfg["trader"].get("exits"))
+        self.exits = self.base_exits
         self.protections = ProtectionConfig.from_dict(cfg["trader"].get("protections"))
         # replaced by the dynamic pairlist when it is enabled (see app.py)
         self.trading_symbols: Callable[[], list[str]] = lambda: list(cfg.symbols)
@@ -87,6 +91,51 @@ class Trader:
         self._rest_prices_at = 0.0
         self._stale_notified = False
         self._daily_cache: tuple[float, int | None, DailyStats] | None = None
+        self._apply_strategy_mode(self.strategy_mode)
+
+    # ================================================================== strategy mode (UI switch)
+    @property
+    def strategy_mode(self) -> str:
+        """``config`` (strategy from config.yaml) or a scalping preset chosen in the UI (DEMO only)."""
+        mode = self.db.kv_get("strategy_mode") or "config"
+        return mode if mode in SCALP_PRESETS and not self.ex.live else "config"
+
+    def _apply_strategy_mode(self, mode: str) -> None:
+        if mode in SCALP_PRESETS:
+            self.strategy = replace(self.base_strategy, **SCALP_PRESETS[mode])
+            self.exits = replace(self.base_exits, time_limit_hours=SCALP_TIME_LIMIT_HOURS)
+        else:
+            self.strategy, self.exits = self.base_strategy, self.base_exits
+
+    async def set_strategy_mode(self, mode: str) -> str:
+        async with self.lock:
+            if mode != "config" and mode not in SCALP_PRESETS:
+                return f"❌ Неизвестный режим: {mode}"
+            if mode != "config" and self.ex.live:
+                return "❌ Скальпинг убыточен в бэктесте и разрешён только на DEMO."
+            if self.state is not None and self.state.positions:
+                return "❌ Есть открытые позиции — дождитесь их закрытия или завершите сессию, затем переключите режим."
+            if mode == self.strategy_mode:
+                return "Этот режим уже включён."
+            self.db.kv_set("strategy_mode", mode)
+            self._apply_strategy_mode(mode)
+            if mode == "config":
+                msg = "✅ Стратегия: из config.yaml (вход на 1h)."
+            else:
+                msg = (f"✅ Стратегия: скальпинг 5m ({mode}), только DEMO. Вход проверяется на закрытии каждой 5m-свечи, "
+                       f"позиция живёт не дольше {SCALP_TIME_LIMIT_HOURS:g} ч. В бэктесте режим убыточен из-за комиссий. "
+                       "Лимиты сессии и hard_caps действуют как обычно.")
+            self.notify(msg)
+            return msg
+
+    def session_presets(self) -> dict[str, Any]:
+        """Session values the current mode uses when they are not given explicitly (within hard_caps)."""
+        if self.strategy.entry_mode not in SCALP_MODES:
+            return {}
+        c = self.engine.caps
+        return {"duration_hours": min(SCALP_SESSION["duration_hours"], c.max_duration_hours),
+                "no_entry_last_hours": SCALP_SESSION["no_entry_last_hours"],
+                "max_trades": min(SCALP_SESSION["max_trades"], c.max_trades_per_session)}
 
     # ================================================================== flags
     @property
@@ -183,7 +232,7 @@ class Trader:
                 msg = "Сессия не запущена: " + "; ".join(blockers)
                 return msg
             try:
-                params = self.cfg.session_defaults.replace(**overrides)
+                params = self.cfg.session_defaults.replace(**{**self.session_presets(), **overrides})
             except ValueError as exc:
                 return f"Ошибка параметров: {exc}"
             try:

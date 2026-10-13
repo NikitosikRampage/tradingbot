@@ -24,6 +24,18 @@ ENTRY_MODES = ("pullback", "breakout", "scalp_revert", "scalp_breakout")
 SCALP_MODES = ("scalp_revert", "scalp_breakout")
 EXIT_MODES = ("fixed", "atr")
 
+# Scalping presets switchable from the UI (DEMO only) — the variants of scripts/research_scalp.py.
+# Both FAILED the cost-inclusive backtest (IMPROVEMENTS.md, section 8); kept for watching on DEMO.
+SCALP_PRESETS: dict[str, dict[str, Any]] = {
+    "scalp_revert": {"entry_mode": "scalp_revert", "bb_period": 20, "bb_k": 2.0, "scalp_rsi_max": 30.0,
+                     "scalp_sl_atr": 1.5, "scalp_tp_atr": 1.5, "btc_regime": False, "min_atr_pct": 0.0},
+    "scalp_breakout": {"entry_mode": "scalp_breakout", "scalp_breakout_bars": 12, "scalp_vol_mult": 1.5,
+                       "scalp_sl_atr": 1.0, "scalp_tp_atr": 2.0, "btc_regime": False, "min_atr_pct": 0.0},
+}
+SCALP_TIME_LIMIT_HOURS = 1.0
+# session values used for scalping when not given explicitly (each capped by hard_caps)
+SCALP_SESSION = {"duration_hours": 24.0, "no_entry_last_hours": 1.0, "max_trades": 50}
+
 
 @dataclass
 class StrategyParams:
