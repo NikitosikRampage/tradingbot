@@ -1,7 +1,7 @@
 # OKX Monitor & Light Trader
 
 Бот для круглосуточного мониторинга рынка и лёгкой спотовой торговли на OKX.
-Python 3.11, ccxt + websockets, SQLite, локальный веб-интерфейс (aiohttp, без внешних сервисов).
+Python 3.11–3.13, ccxt + websockets, SQLite, локальный веб-интерфейс (aiohttp, без внешних сервисов).
 Работает локально на Windows 11 (venv, без Docker), код кроссплатформенный (пути через `pathlib`).
 Управление и вся аналитика — в браузере на этом же компьютере: http://127.0.0.1:8765.
 
@@ -86,7 +86,8 @@ tradingbot/
 
 ## Установка
 
-Нужен Python **3.11** (64-bit) с python.org, при установке отметьте «Add python.exe to PATH».
+Нужен Python **3.11, 3.12 или 3.13** (64-bit) с python.org (рекомендуется 3.12), при установке отметьте
+«Add python.exe to PATH». `setup.bat` сам найдёт подходящую версию; если её нет — напишет, что установить.
 
 ```bat
 git clone <repo> C:\bots\tradingbot
@@ -98,7 +99,7 @@ setup.bat
 `.env.example → .env`. Вручную то же самое:
 
 ```bat
-py -3.11 -m venv .venv
+py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-dev.txt
 copy config.example.yaml config.yaml
 copy .env.example .env

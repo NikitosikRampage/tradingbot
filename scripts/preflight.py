@@ -110,8 +110,8 @@ def main() -> int:
 
     from bot.config import ConfigError, load_config
 
-    if sys.version_info[:2] != (3, 11):
-        report(WARN, "Python", f"{sys.version.split()[0]} (проект рассчитан на 3.11)")
+    if not (3, 11) <= sys.version_info[:2] <= (3, 13):
+        report(WARN, "Python", f"{sys.version.split()[0]} (проверено на 3.11–3.13)")
     else:
         report(OK, "Python", sys.version.split()[0])
     if not Path(args.config).exists():
