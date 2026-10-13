@@ -405,3 +405,26 @@ def test_entry_skipped_below_exchange_min_order(env):
         tr.generate_signal = orig
     assert not t.state.positions and db.trades() == []
     assert any("минимального ордера" in m for m in msgs)
+
+
+def test_scalp_mode_is_demo_only_and_triggers_on_5m(env):
+    cfg, db, ex, market, msgs, make = env
+    cfg.raw["trader"]["strategy"] = {"entry_mode": "scalp_revert"}
+    t = make()
+    assert not any("DEMO" in b for b in t.blockers())
+    calls = []
+    import bot.trader as tr
+    orig = tr.generate_scalp_signal
+    tr.generate_scalp_signal = lambda *a, **k: calls.append(a[0])
+    try:
+        async def scenario():
+            await t.start_session({})
+            set_price(market, ex, "ETH/USDT", 100.0)
+            await t.on_candle_closed("ETH/USDT", "1h", [0, 1, 1, 1, 1, 1])   # wrong timeframe: ignored
+            await t.on_candle_closed("ETH/USDT", "5m", [0, 1, 1, 1, 1, 1])
+        run(scenario())
+    finally:
+        tr.generate_scalp_signal = orig
+    assert calls == ["ETH/USDT"]
+    ex.live = True   # the same mode on a real account is blocked
+    assert any("только на DEMO" in b for b in t.blockers())

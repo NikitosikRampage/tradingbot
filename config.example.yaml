@@ -75,6 +75,15 @@ trader:
     atr_tp_mult: 3.0           # TP = 3 × ATR1h
     min_atr_pct: 0             # фильтр ATR не прошёл проверку — выключен
     btc_regime: true           # альты только при аптренде BTC на 4h
+    # --- Частые сделки (скальпинг на 5m, тренд по EMA50/200 на 1h). НЕ прошёл бэктест: за год 5m-истории
+    # 16 пар оба варианта в минусе из-за комиссий (IMPROVEMENTS.md, раздел 8). Работает ТОЛЬКО на DEMO —
+    # на реальном счёте trader откажется торговать. Чтобы посмотреть на демо, замените entry_mode и добавьте:
+    #   entry_mode: scalp_revert   # scalp_revert (Боллинджер 20/2σ + RSI<30) | scalp_breakout (пробой 12 свечей + объём ×1.5)
+    #   btc_regime: false
+    #   scalp_sl_atr: 1.5          # SL = min(stop_loss_pct, 1.5 × ATR 5m)
+    #   scalp_tp_atr: 1.5          # TP = max(1.5 × ATR 5m, 3 × комиссия за круг)
+    # и в session_defaults: duration_hours: 24, no_entry_last_hours: 1, max_trades: 50 (≤ hard_caps),
+    # в trader.exits: time_limit_hours: 1.
 
   # Защиты входа (как Protections во Freqtrade). Только БЛОКИРУЮТ входы, лимиты сессии не ослабляют.
   # Выключены, пока scripts/evaluate_improvements.py не покажет улучшение out-of-sample на реальной истории.

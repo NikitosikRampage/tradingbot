@@ -25,7 +25,7 @@ from .marketdata import closes, closes_4h
 from .protections import ClosedTrade, ProtectionConfig, compute_locks, entry_blocked
 from .risk import (STOP_REASON_RU, Action, DailyStats, Position, SessionParams, SessionState,
                    SessionStatus, StopReason)
-from .strategy import Signal, StrategyParams, exit_levels, generate_scalp_signal, generate_signal
+from .strategy import SCALP_MODES, Signal, StrategyParams, exit_levels, generate_scalp_signal, generate_signal
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +141,9 @@ class Trader:
             b.append("реальный счёт не подтверждён (код в интерфейсе)")
         if self.stop_file.exists():
             b.append(f"существует файл {self.stop_file.name}")
+        if self.ex.live and self.strategy.entry_mode in SCALP_MODES:
+            # 5m scalping failed the cost-inclusive backtest (IMPROVEMENTS.md, section 8): DEMO only
+            b.append(f"режим {self.strategy.entry_mode} убыточен в бэктесте и разрешён только на DEMO")
         return b
 
     # ================================================================== persistence
