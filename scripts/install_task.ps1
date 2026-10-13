@@ -1,6 +1,6 @@
 # Registers two Task Scheduler tasks for the current user:
 #   OKXBot           - starts at logon, restarts on failure (run_forever.py also restarts main.py)
-#   OKXBot-Watchdog  - every 5 min, Telegram alert if the bot is silent > 5 min
+#   OKXBot-Watchdog  - every 5 min, Windows notification if the bot is silent > 5 min
 # Run:  powershell -ExecutionPolicy Bypass -File scripts\install_task.ps1
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -22,6 +22,6 @@ $wTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
 $wSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName "OKXBot-Watchdog" -Action $wAction -Trigger $wTrigger -Settings $wSettings `
-    -Principal $principal -Description "Alerts to Telegram if OKXBot is silent" -Force | Out-Null
+    -Principal $principal -Description "Windows notification if OKXBot is silent" -Force | Out-Null
 
 Write-Host "Tasks OKXBot and OKXBot-Watchdog registered. Start now: Start-ScheduledTask -TaskName OKXBot"

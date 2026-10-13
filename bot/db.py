@@ -48,6 +48,11 @@ CREATE INDEX IF NOT EXISTS ix_trades_session ON trades(session_id);
 CREATE INDEX IF NOT EXISTS ix_trades_exit ON trades(exit_ts);
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT, updated_at REAL);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, text TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_events_kind ON events(kind, id);
 """
 
 

@@ -91,7 +91,8 @@ DEFAULTS: dict[str, Any] = {
                  "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
                  "grace_minutes": 15, "params": {}},
     "health": {"silent_alert_minutes": 5, "check_interval_sec": 30},
-    "telegram": {"enabled": True},
+    # local web interface (only this computer can open it)
+    "ui": {"host": "127.0.0.1", "port": 8765},
 }
 
 
@@ -115,13 +116,11 @@ class Secrets:
     okx_secret: str = ""
     okx_passphrase: str = ""
     live_trading: bool = False
-    telegram_token: str = ""
-    telegram_chat_id: int | None = None
     anthropic_key: str = ""
 
     def values(self) -> list[str]:
         return [v for v in (self.okx_key, self.okx_secret, self.okx_passphrase,
-                            self.telegram_token, self.anthropic_key) if v]
+                            self.anthropic_key) if v]
 
 
 def _truthy(v: str | None) -> bool:
@@ -132,14 +131,11 @@ def load_secrets(env_file: Path | None = None) -> Secrets:
     load_dotenv(env_file or ROOT / ".env", override=False)
     live = _truthy(os.getenv("OKX_LIVE_TRADING"))
     prefix = "OKX_" if live else "OKX_DEMO_"
-    chat = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     return Secrets(
         okx_key=os.getenv(prefix + "API_KEY", ""),
         okx_secret=os.getenv(prefix + "API_SECRET", ""),
         okx_passphrase=os.getenv(prefix + "API_PASSPHRASE", ""),
         live_trading=live,
-        telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        telegram_chat_id=int(chat) if chat.lstrip("-").isdigit() else None,
         anthropic_key=os.getenv("ANTHROPIC_API_KEY", ""),
     )
 

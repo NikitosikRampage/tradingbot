@@ -14,7 +14,6 @@ class SecretFilter(logging.Filter):
     def __init__(self, secrets: list[str]):
         super().__init__()
         self.secrets = [s for s in secrets if s and len(s) >= 6]
-        # telegram bot token pattern in URLs logged by httpx
         self.token_re = re.compile(r"bot\d+:[A-Za-z0-9_-]{20,}")
 
     def _clean(self, text: str) -> str:
@@ -57,5 +56,5 @@ def setup_logging(log_dir: Path, level: str = "INFO", secrets: list[str] | None 
         h.addFilter(flt)
         root.addHandler(h)
     # noisy libraries
-    for name in ("httpx", "httpx2", "telegram.ext", "websockets", "ccxt", "asyncio", "anthropic"):
+    for name in ("httpx", "httpx2", "aiohttp.access", "websockets", "ccxt", "asyncio", "anthropic"):
         logging.getLogger(name).setLevel(logging.WARNING)

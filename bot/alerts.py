@@ -1,4 +1,4 @@
-"""Alert rules -> Telegram, with per-rule/per-coin cooldown."""
+"""Alert rules -> event log / local UI, with per-rule/per-coin cooldown."""
 from __future__ import annotations
 
 import logging

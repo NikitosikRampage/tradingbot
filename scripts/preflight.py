@@ -1,11 +1,10 @@
 """Pre-flight check before running the bot on OKX DEMO. Read-only: places no orders.
 
-    python scripts/preflight.py            # all checks
-    python scripts/preflight.py --no-telegram
+    python scripts/preflight.py
 
 Checks: config + hard caps, Python version, API keys present (values are never printed),
 DEMO mode, OKX public REST + WebSocket, authenticated demo account (USDT balance vs budget,
-API key permissions), Telegram token + chat id (sends one test message), sleep risk notes.
+API key permissions), the local UI port.
 """
 from __future__ import annotations
 
@@ -13,8 +12,6 @@ import argparse
 import asyncio
 import json
 import sys
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,28 +89,23 @@ async def check_okx(cfg) -> None:
         await priv.close()
 
 
-def check_telegram(cfg) -> None:
-    s = cfg.secrets
-    if not s.telegram_token or not s.telegram_chat_id:
-        report(FAIL, "Telegram", "в .env не заполнены TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
-        return
-    base = f"https://api.telegram.org/bot{s.telegram_token}"
-    try:
-        me = json.loads(urllib.request.urlopen(f"{base}/getMe", timeout=15).read())
-        report(OK, "Telegram-бот", "@" + me["result"]["username"])
-        data = urllib.parse.urlencode({"chat_id": s.telegram_chat_id,
-                                       "text": "✅ Предстартовая проверка: бот может писать в этот чат."}).encode()
-        urllib.request.urlopen(f"{base}/sendMessage", data=data, timeout=15).read()
-        report(OK, "Telegram chat_id", "тестовое сообщение отправлено — проверьте Telegram")
-    except Exception as exc:  # noqa: BLE001
-        msg = str(exc).replace(s.telegram_token, "***")
-        report(FAIL, "Telegram", f"{type(exc).__name__}: {msg} (неверный токен или вы не написали боту /start)")
+def check_ui_port(cfg) -> None:
+    import socket
+
+    ui = cfg.raw.get("ui") or {}
+    host, port = str(ui.get("host", "127.0.0.1")), int(ui.get("port", 8765))
+    with socket.socket() as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+            report(OK, "Порт интерфейса", f"{host}:{port} свободен — интерфейс будет на http://{host}:{port}")
+        except OSError:
+            report(WARN, "Порт интерфейса", f"{host}:{port} занят (бот уже запущен?) — или смените ui.port в config.yaml")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=str(ROOT / "config.yaml"))
-    ap.add_argument("--no-telegram", action="store_true")
     args = ap.parse_args()
 
     from bot.config import ConfigError, load_config
@@ -139,12 +131,11 @@ def main() -> int:
     else:
         report(OK, "Режим", "DEMO (x-simulated-trading)")
     report(OK if cfg["trader"]["enabled"] else WARN, "Trader",
-           "включён" if cfg["trader"]["enabled"] else "выключен в config.yaml — включите здесь или командой /trader_on")
+           "включён" if cfg["trader"]["enabled"] else "выключен в config.yaml — включите здесь или кнопкой в интерфейсе")
     if (ROOT / "STOP").exists():
         report(FAIL, "Файл STOP", "существует — удалите, иначе trader не включится")
     asyncio.run(check_okx(cfg))
-    if not args.no_telegram:
-        check_telegram(cfg)
+    check_ui_port(cfg)
     fails = [r for r in results if r[0] == FAIL]
     print("\n" + ("Готово к запуску на DEMO: start.bat" if not fails else f"Исправьте {len(fails)} пункт(а) выше и запустите проверку снова."))
     return 1 if fails else 0

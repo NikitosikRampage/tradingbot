@@ -20,7 +20,8 @@ from typing import Any, Sequence
 
 from .indicators import ema, rsi
 
-ENTRY_MODES = ("pullback", "breakout")
+ENTRY_MODES = ("pullback", "breakout", "scalp_revert", "scalp_breakout")
+SCALP_MODES = ("scalp_revert", "scalp_breakout")
 EXIT_MODES = ("fixed", "atr")
 
 
@@ -40,6 +41,24 @@ class StrategyParams:
     atr_tp_mult: float = 3.0
     min_atr_pct: float = 0.0     # 0 = off
     btc_regime: bool = False
+    # ---- 5-minute scalping (entry_mode scalp_revert / scalp_breakout); trend filter on 1h EMAs
+    bb_period: int = 20
+    bb_k: float = 2.0
+    scalp_rsi_max: float = 30.0      # scalp_revert: RSI(14, 5m) below this
+    scalp_breakout_bars: int = 12    # scalp_breakout: close above the high of the last N 5m candles
+    scalp_vol_mult: float = 1.5      # ... with volume >= N × average of those candles
+    scalp_sl_atr: float = 1.5        # SL = min(session stop_loss_pct, k × ATR(14, 5m))
+    scalp_tp_atr: float = 1.5        # TP = max(k × ATR(14, 5m), 3 × round-trip fee)
+
+    @property
+    def signal_tf(self) -> str:
+        """Timeframe whose closed candles trigger the entry check."""
+        return "5m" if self.entry_mode in SCALP_MODES else "1h"
+
+    @property
+    def trend_tf(self) -> str:
+        """Timeframe of the EMA trend filter."""
+        return "1h" if self.entry_mode in SCALP_MODES else "4h"
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> "StrategyParams":
@@ -144,6 +163,49 @@ def generate_signal(symbol: str, closes_1h: Sequence[float], closes_4h: Sequence
               + ("; BTC в аптренде" if p.btc_regime else ""))
     return Signal(symbol, closes_1h[-1], reason, ef, es, prev, now,  # type: ignore[arg-type]
                   sl_pct=sl_pct, tp_pct=tp_pct, atr_pct=atr)
+
+
+def generate_scalp_signal(symbol: str, candles_5m: Sequence[Sequence[float]], closes_1h: Sequence[float],
+                          p: StrategyParams, btc_closes_1h: Sequence[float] | None = None,
+                          fee_rate: float = 0.001) -> Signal | None:
+    """5-minute entries inside a 1h uptrend (EMA fast > slow, close > slow). CLOSED candles only."""
+    if len(candles_5m) < max(p.bb_period, p.scalp_breakout_bars, p.atr_period * 3) + 2:
+        return None
+    closes = [c[4] for c in candles_5m]
+    last = candles_5m[-1]
+    if p.entry_mode == "scalp_revert":
+        win = closes[-p.bb_period:]
+        mid = sum(win) / p.bb_period
+        sd = (sum((x - mid) ** 2 for x in win) / p.bb_period) ** 0.5
+        lower = mid - p.bb_k * sd
+        if not last[4] < lower:
+            return None
+        r = rsi(closes[-100:], p.rsi_period)
+        if r[-1] is None or r[-1] >= p.scalp_rsi_max:
+            return None
+        trigger = f"5m: закрытие {last[4]:.6g} ниже полосы Боллинджера {lower:.6g}, RSI {r[-1]:.1f}"
+        prev_r, now_r = r[-2] or 0.0, r[-1]
+    else:
+        prev = candles_5m[-p.scalp_breakout_bars - 1:-1]
+        level = max(c[2] for c in prev)
+        avg_vol = sum(c[5] for c in prev) / len(prev)
+        if not (last[4] > level and avg_vol > 0 and last[5] >= p.scalp_vol_mult * avg_vol):
+            return None
+        trigger = f"5m: пробой {level:.6g} за {p.scalp_breakout_bars} свечей, объём ×{last[5] / avg_vol:.1f}"
+        prev_r = now_r = 0.0
+    up, ef, es = trend_up(closes_1h, p)
+    if not up:
+        return None
+    if p.btc_regime and not symbol.startswith("BTC/"):
+        if btc_closes_1h is None or not trend_up(btc_closes_1h, p)[0]:
+            return None
+    atr = atr_pct_1h(candles_5m[-(p.atr_period * 10):], p.atr_period)
+    if atr is None or atr < p.min_atr_pct:
+        return None
+    tp_floor = 3 * 2 * fee_rate * 100 + 0.01
+    reason = (f"Тренд 1h вверх: EMA{p.ema_fast}={ef:.6g} > EMA{p.ema_slow}={es:.6g}; {trigger}; ATR5m {atr:.2f}%")
+    return Signal(symbol, last[4], reason, ef, es, prev_r, now_r,  # type: ignore[arg-type]
+                  sl_pct=p.scalp_sl_atr * atr, tp_pct=max(p.scalp_tp_atr * atr, tp_floor), atr_pct=atr)
 
 
 def exit_levels(entry: float, sig: Signal | None, stop_loss_pct: float, take_profit_pct: float) -> tuple[float, float]:

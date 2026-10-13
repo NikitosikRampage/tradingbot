@@ -38,7 +38,7 @@ STOP_REASON_RU = {
     StopReason.CONSECUTIVE_LOSSES: "серия убыточных сделок",
     StopReason.DAILY_LOSS_CAP: "дневной лимит убытка",
     StopReason.MANUAL: "ручная остановка",
-    StopReason.EMERGENCY: "аварийная остановка (/stop или файл STOP)",
+    StopReason.EMERGENCY: "аварийная остановка (кнопка «Стоп» или файл STOP)",
 }
 
 
@@ -108,7 +108,7 @@ _STR = {"on_session_end", "consecutive_loss_action"}
 
 
 def coerce_param(name: str, value: Any) -> Any:
-    """Convert a raw (string) value coming from YAML/Telegram to the right type."""
+    """Convert a raw (string) value coming from YAML/the web UI to the right type."""
     if name in _BOOL:
         if isinstance(value, bool):
             return value
@@ -325,7 +325,7 @@ class RiskEngine:
                     has_active: bool) -> list[str]:
         errors = self.validate_params(p)
         if has_active:
-            errors.append("Уже есть активная сессия — сначала /session_end")
+            errors.append("Уже есть активная сессия — сначала завершите её")
         if daily.budget_allocated_usdt + p.budget_usdt > self.daily_caps.daily_budget_cap_usdt + 1e-9:
             errors.append(
                 f"Превышен daily_budget_cap_usdt: уже выделено {daily.budget_allocated_usdt:.2f}, "
@@ -397,7 +397,7 @@ class RiskEngine:
         if cutoff > 0 and now >= state.ends_at - cutoff * 3600:
             return False, f"последние {cutoff:g}ч сессии — новые входы не открываются", 0.0
         if state.manual_paused:
-            return False, "пауза (/pause)", 0.0
+            return False, "пауза (включена вручную)", 0.0
         if state.paused_until and now < state.paused_until:
             return False, "пауза после серии убытков", 0.0
         if not data_fresh:

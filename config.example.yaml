@@ -54,7 +54,7 @@ analytics:
     refusal_fallback: true
 
 trader:
-  enabled: false                 # по умолчанию ВЫКЛЮЧЕН. Включение: здесь или /trader_on
+  enabled: false                 # по умолчанию ВЫКЛЮЧЕН. Включение: здесь или кнопкой в интерфейсе
   exchange_side_sl_tp: true      # OCO-ордер SL/TP на бирже (защищает, пока ПК спит)
   tick_interval_sec: 1
   # Стратегия: тренд EMA50/200 на 4h + вход на 1h. Принято по исследованию 2019 → сегодня (IMPROVEMENTS.md):
@@ -138,7 +138,7 @@ session_defaults:
   stop_loss_pct: 2
   take_profit_pct: 4
 
-# Жёсткие потолки. Telegram НЕ может их превысить. Менять только здесь + перезапуск.
+# Жёсткие потолки. Интерфейс НЕ может их превысить. Менять только здесь + перезапуск.
 hard_caps:
   max_budget_usdt: 50
   max_loss_usdt: 10
@@ -158,4 +158,5 @@ schedule:
   params: {budget_usdt: 10, duration_hours: 8}
 
 health: {silent_alert_minutes: 5, check_interval_sec: 30}
-telegram: {enabled: true}
+# Локальный интерфейс: откройте http://127.0.0.1:8765 (доступен только с этого компьютера)
+ui: {host: 127.0.0.1, port: 8765}

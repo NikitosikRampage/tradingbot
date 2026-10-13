@@ -21,11 +21,11 @@ from .db import Database
 from .exchange import Exchange, new_client_id
 from .health import Health
 from .exits import ExitConfig, check_exit, raise_stop
-from .marketdata import closes_4h
+from .marketdata import closes, closes_4h
 from .protections import ClosedTrade, ProtectionConfig, compute_locks, entry_blocked
 from .risk import (STOP_REASON_RU, Action, DailyStats, Position, SessionParams, SessionState,
                    SessionStatus, StopReason)
-from .strategy import Signal, StrategyParams, exit_levels, generate_signal
+from .strategy import Signal, StrategyParams, exit_levels, generate_scalp_signal, generate_signal
 
 log = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ class Trader:
     def request_live_confirmation(self) -> None:
         self.live_code = f"{pysecrets.randbelow(10 ** 6):06d}"
         self._notify("⚠️ В .env включён OKX_LIVE_TRADING=true (РЕАЛЬНЫЙ счёт).\n"
-                     f"Торговля заблокирована до подтверждения: /confirm_live {self.live_code}\n"
+                     f"Торговля заблокирована до подтверждения: введите код {self.live_code} в интерфейсе бота.\n"
                      "Если это ошибка — выключите флаг в .env и перезапустите бота.")
 
     def confirm_live(self, code: str) -> str:
@@ -134,11 +134,11 @@ class Trader:
     def blockers(self) -> list[str]:
         b = []
         if not self.enabled:
-            b.append("trader выключен (/trader_on)")
+            b.append("trader выключен (включите в интерфейсе)")
         if not self.ex.can_trade:
             b.append("нет API-ключей OKX в .env")
         if not self.live_confirmed:
-            b.append("реальный счёт не подтверждён (/confirm_live)")
+            b.append("реальный счёт не подтверждён (код в интерфейсе)")
         if self.stop_file.exists():
             b.append(f"существует файл {self.stop_file.name}")
         return b
@@ -174,7 +174,7 @@ class Trader:
     async def start_session(self, overrides: dict[str, Any], source: str = "вручную") -> str:
         async with self.lock:
             if self.state is not None:
-                return "Уже есть активная сессия. /session_status или /session_end"
+                return "Уже есть активная сессия — сначала завершите её."
             blockers = self.blockers()
             if blockers:
                 msg = "Сессия не запущена: " + "; ".join(blockers)
@@ -353,7 +353,7 @@ class Trader:
 
     # ================================================================== entries
     async def on_candle_closed(self, symbol: str, tf: str, row: list[float]) -> None:
-        if tf != "1h" or self.state is None or symbol not in self.trading_symbols():
+        if tf != self.strategy.signal_tf or self.state is None or symbol not in self.trading_symbols():
             return
         await self.try_enter(symbol)
 
@@ -372,12 +372,17 @@ class Trader:
             if blocked:
                 log.info("entry %s blocked by protection: %s", symbol, why)
                 return
-            c1 = self.db.candles(symbol, "1h", limit=300)
-            btc4 = (closes_4h(self.db, "BTC/USDT", self.strategy.ema_slow + 60)
-                    if self.strategy.btc_regime else None)
-            sig = generate_signal(symbol, [r[4] for r in c1],
-                                  closes_4h(self.db, symbol, self.strategy.ema_slow + 60), self.strategy,
-                                  candles_1h=c1, btc_closes_4h=btc4, fee_rate=self.engine.fee_rate)
+            n_trend = self.strategy.ema_slow + 60
+            if self.strategy.signal_tf == "5m":
+                c5 = self.db.candles(symbol, "5m", limit=300)
+                btc1 = closes(self.db, "BTC/USDT", "1h", n_trend) if self.strategy.btc_regime else None
+                sig = generate_scalp_signal(symbol, c5, closes(self.db, symbol, "1h", n_trend), self.strategy,
+                                            btc_closes_1h=btc1, fee_rate=self.engine.fee_rate)
+            else:
+                c1 = self.db.candles(symbol, "1h", limit=300)
+                btc4 = closes_4h(self.db, "BTC/USDT", n_trend) if self.strategy.btc_regime else None
+                sig = generate_signal(symbol, [r[4] for r in c1], closes_4h(self.db, symbol, n_trend), self.strategy,
+                                      candles_1h=c1, btc_closes_4h=btc4, fee_rate=self.engine.fee_rate)
             if sig is None:
                 return
             try:

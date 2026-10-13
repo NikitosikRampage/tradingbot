@@ -13,7 +13,7 @@ from .config import Config
 from .db import Database
 from .exchange import Exchange
 from .health import Health
-from .notifier import Notifier
+from .events import EventLog
 from .pairlist import PairlistConfig, PairlistService, PairSelector
 from .scheduler import Scheduler
 from .trader import Trader
@@ -25,32 +25,27 @@ class App:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.db = Database(cfg.path("db"))
-        self.notifier = Notifier(cfg.secrets.telegram_chat_id)
+        self.events = EventLog(self.db)
         self.health = Health(cfg.path("heartbeat_file"),
-                             float(cfg["health"]["silent_alert_minutes"]) * 60, self.notifier.send)
+                             float(cfg["health"]["silent_alert_minutes"]) * 60, self.events.send)
         self.ex = Exchange(cfg)
         self.market = MarketState()
         self.collector = Collector(cfg, self.db, self.ex, self.market, self.health)
-        self.alerts = AlertEngine(cfg, self.db, self.market, self.notifier.send)
-        self.analytics = Analytics(cfg, self.db, self.market, self.notifier.send)
-        self.trader = Trader(cfg, self.db, self.ex, self.market, self.health, self.notifier.send)
+        self.alerts = AlertEngine(cfg, self.db, self.market, self.events.send)
+        self.analytics = Analytics(cfg, self.db, self.market, self.events.send)
+        self.trader = Trader(cfg, self.db, self.ex, self.market, self.health, self.events.send)
         self.scheduler = Scheduler(cfg, self.db, self.analytics, self.trader)
         pl_cfg = PairlistConfig.from_dict(cfg.raw.get("pairlist"))
         position_usdt = cfg.session_defaults.budget_usdt * cfg.session_defaults.position_size_pct / 100
         self.pairlist = PairlistService(pl_cfg, self.db, PairSelector(pl_cfg, self.ex.public, position_usdt),
-                                        self.notifier.send, cfg.symbols, on_change=self._on_pairs_changed)
+                                        self.events.send, cfg.symbols, on_change=self._on_pairs_changed)
         self.trader.trading_symbols = self.pairlist.symbols
         self.collector.symbols = self._watch_symbols()
         self.collector.on_tick.append(self.alerts.on_tick)
         self.collector.on_candle_closed.append(self.alerts.on_candle_closed)
         self.collector.on_candle_closed.append(self.trader.on_candle_closed)
-        self.telegram: Any = None
-        s = cfg.secrets
-        if cfg["telegram"].get("enabled", True) and s.telegram_token and s.telegram_chat_id:
-            from .telegram_bot import TelegramBot
-            self.telegram = TelegramBot(self, s.telegram_token, s.telegram_chat_id)
-        else:
-            log.warning("Telegram не настроен (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) — уведомления только в лог")
+        from .web import WebUI
+        self.web = WebUI(self)
         self.stop_event = asyncio.Event()
         self.tasks: list[asyncio.Task[Any]] = []
 
@@ -103,7 +98,7 @@ class App:
             last = now
             if gap > 60:
                 log.warning("Пауза %.0f сек — вероятно, сон/гибернация", gap)
-                self.notifier.send(f"😴 Компьютер «спал» ~{gap / 60:.0f} мин. Переподключаюсь, сверяю позиции.")
+                self.events.send(f"😴 Компьютер «спал» ~{gap / 60:.0f} мин. Переподключаюсь, сверяю позиции.")
                 await self.collector.force_reconnect()
                 try:
                     await self.trader.on_wake()
@@ -127,12 +122,10 @@ class App:
         def spawn(name: str, fn: Callable[[], Awaitable[Any]]) -> None:
             self.tasks.append(asyncio.create_task(self._supervise(name, fn), name=name))
 
-        if self.telegram is not None:
-            # in the background: no network at boot must not block the rest of the bot
-            spawn("telegram", lambda: self._retry_forever("telegram start", self.telegram.start))
+        # the local UI comes up first, so it shows what the bot is doing while it connects
+        await self.web.start()
         await self._retry_forever("load_markets", self.ex.load_markets)
 
-        spawn("notifier", self.notifier.run)
         spawn("health", lambda: self.health.run(float(self.cfg["health"]["check_interval_sec"])))
         spawn("collector", self.collector.run)
         spawn("sleep_watcher", self._sleep_watcher)
@@ -155,9 +148,9 @@ class App:
         spawn("trader", self.trader.run)
         spawn("scheduler", self.scheduler.run)
         b = self.trader.blockers()
-        self.notifier.send(f"🚀 Бот запущен [{mode}]. Мониторинг: {', '.join(s.split('/')[0] for s in self.cfg.symbols)}. "
-                           f"Trader: {'ВКЛ' if self.trader.enabled else 'выкл'}"
-                           + (f" ({'; '.join(b)})" if b and self.trader.enabled else "") + ". /help")
+        self.events.send(f"🚀 Бот запущен [{mode}]. Мониторинг: {', '.join(s.split('/')[0] for s in self.cfg.symbols)}. "
+                         f"Trader: {'ВКЛ' if self.trader.enabled else 'выкл'}"
+                         + (f" ({'; '.join(b)})" if b and self.trader.enabled else "") + f". Интерфейс: {self.web.url}")
         await self.stop_event.wait()
 
     async def shutdown(self) -> None:
@@ -167,18 +160,12 @@ class App:
             self.trader.persist()
         except Exception:  # noqa: BLE001
             log.exception("persist on shutdown")
-        self.notifier.send("⏏️ Бот остановлен штатно." + (
+        self.events.send("⏏️ Бот остановлен штатно." + (
             " Активная сессия будет восстановлена при следующем запуске." if self.trader.state else ""))
-        # let the notifier flush
-        for _ in range(10):
-            if self.notifier.queue.empty():
-                break
-            await asyncio.sleep(0.5)
         for t in self.tasks:
             t.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
-        if self.telegram is not None:
-            await self.telegram.stop()
+        await self.web.stop()
         await self.ex.close()
         self.db.close()
         log.info("Остановлено.")

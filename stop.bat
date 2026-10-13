@@ -1,6 +1,6 @@
 @echo off
 REM Graceful stop: the bot saves the session state; positions are NOT closed
-REM (an active session is restored at the next start). Emergency close-all: create file STOP or /stop.
+REM (an active session is restored at the next start). Emergency close-all: the "Stop" button in the interface or create file STOP.
 cd /d "%~dp0"
 echo.> SHUTDOWN
 set PID=

@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OKX Bot</title>
+<style>
+/* Layout: sticky header with mode + kill switch, tab bar, one panel per tab; cards on a grid. */
+:root {
+  --bg: #f6f6f4; --panel: #ffffff; --line: #e3e2de; --grid: #ecebe7;
+  --fg: #16161a; --fg2: #55544f; --muted: #8a8984;
+  --accent: #2a78d6; --accent-soft: #e4eefb; --muted-series: #b9b8b2;
+  --ok: #0b7a0b; --bad: #c62f2f; --warn: #a56a00;
+  --ok-bg: #e5f4e5; --bad-bg: #fbe7e7; --warn-bg: #fdf1d8;
+  --font: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  --r: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121315; --panel: #1b1c1f; --line: #2c2d31; --grid: #25262a;
+    --fg: #ecebe7; --fg2: #b9b8b2; --muted: #85847f;
+    --accent: #4a92ea; --accent-soft: #1d2b3d; --muted-series: #5d5c58;
+    --ok: #4cc24c; --bad: #ef6b6b; --warn: #e3a72f;
+    --ok-bg: #16301a; --bad-bg: #3a1d1d; --warn-bg: #3a2e14;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); }
+button, input, select { font: inherit; color: inherit; }
+header { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 20px; }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .01em; }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px;
+  font-weight: 600; border: 1px solid var(--line); white-space: nowrap; }
+.badge.demo { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.badge.live { background: var(--bad-bg); color: var(--bad); border-color: transparent; }
+.badge.on { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+.badge.off { color: var(--fg2); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+.spacer { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--fg2); }
+.btn:focus-visible, .tab:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: default; }
+nav { display: flex; gap: 2px; padding: 0 20px; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; max-width: 100vw; box-sizing: border-box; scrollbar-width: thin; }
+.tab { border: 0; background: none; padding: 10px 12px; cursor: pointer; color: var(--fg2); border-bottom: 2px solid transparent; white-space: nowrap; }
+.tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+main { padding: 20px; max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
+section[hidden] { display: none !important; }
+.panel-grid { display: grid; gap: 16px; }
+.cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; min-width: 0; display: grid; gap: 10px; align-content: start; }
+.card h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.card .note { margin: 0; color: var(--fg2); font-size: 12.5px; }
+.tile .lbl { color: var(--fg2); font-size: 12px; }
+.tile .val { font-size: 24px; font-weight: 600; line-height: 1.15; }
+.tile .sub { color: var(--muted); font-size: 12px; }
+.pos { color: var(--ok); } .neg { color: var(--bad); }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--fg2); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
+td.l, th.l { text-align: left; }
+td.wrap { white-space: normal; text-align: left; min-width: 220px; color: var(--fg2); }
+.scroll { max-height: 520px; overflow: auto; }
+.empty { color: var(--muted); padding: 18px 4px; text-align: center; }
+.bar { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.bar.badfill > i { background: var(--bad); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 13px; }
+.kv dt { color: var(--fg2); } .kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+form.grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); align-items: end; }
+label.f { display: grid; gap: 4px; font-size: 12px; color: var(--fg2); min-width: 0; }
+label.f input, label.f select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--fg); min-width: 0; width: 100%; box-sizing: border-box; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chart { position: relative; min-height: 220px; }
+.chart.tall { min-height: 320px; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { fill: var(--muted); font-size: 11px; font-family: var(--font); }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.12); padding: 6px 9px; font-size: 12px; white-space: nowrap; z-index: 5; }
+.tip .h { color: var(--fg2); margin-bottom: 2px; }
+.tip b { font-weight: 600; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--fg2); }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.feed { display: grid; gap: 6px; max-height: 640px; overflow: auto; }
+.ev { display: grid; grid-template-columns: 74px 1fr; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.ev time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.ev pre { margin: 0; white-space: pre-wrap; font: inherit; }
+.ev.trade { border-left: 3px solid var(--accent); } .ev.error { border-left: 3px solid var(--bad); }
+.ev.warning { border-left: 3px solid var(--warn); } .ev.session { border-left: 3px solid var(--ok); }
+.toast { position: fixed; right: 16px; bottom: 16px; z-index: 50; max-width: min(460px, calc(100vw - 32px)); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.18); white-space: pre-wrap; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--fg); max-width: 440px; }
+dialog::backdrop { background: rgba(0,0,0,.35); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+pre.report { margin: 0; white-space: pre-wrap; font: 13px/1.5 var(--font); color: var(--fg2); }
+@media (max-width: 640px) { header, main, nav { padding-left: 16px; padding-right: 16px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>OKX Bot</h1>
+  <span id="mode" class="badge">—</span>
+  <span id="trader" class="badge">—</span>
+  <span id="conn" class="badge"><span class="dot"></span><span>связь…</span></span>
+  <span class="spacer"></span>
+  <button class="btn" id="btn-trader" type="button">Включить trader</button>
+  <button class="btn danger" id="btn-stop" type="button" title="Закрыть все позиции по рынку и выключить trader">Стоп</button>
+</header>
+<nav role="tablist" aria-label="Разделы">
+  <button class="tab" role="tab" data-tab="overview" aria-selected="true">Обзор</button>
+  <button class="tab" role="tab" data-tab="trades">Сделки</button>
+  <button class="tab" role="tab" data-tab="analytics">Аналитика</button>
+  <button class="tab" role="tab" data-tab="market">Рынок</button>
+  <button class="tab" role="tab" data-tab="sessions">Сессии</button>
+  <button class="tab" role="tab" data-tab="events">События</button>
+  <button class="tab" role="tab" data-tab="research">Бэктест</button>
+  <button class="tab" role="tab" data-tab="settings">Настройки</button>
+</nav>
+<main>
+  <!-- ======================================================== OVERVIEW -->
+  <section data-panel="overview" class="panel-grid">
+    <div id="live-box" class="card" hidden>
+      <h2>Подтверждение реального счёта</h2>
+      <p class="note" id="live-text"></p>
+      <form id="live-form" class="row"><label class="f">Код<input id="live-code" autocomplete="off" inputmode="numeric"></label>
+        <button class="btn danger" type="submit">Подтвердить реальную торговлю</button></form>
+    </div>
+    <div id="blockers" class="card" hidden><h2>Торговля заблокирована</h2><ul id="blockers-list" class="note"></ul></div>
+    <div class="tiles">
+      <div class="card tile"><div class="lbl">PnL сессии, USDT</div><div class="val" id="t-pnl">—</div><div class="sub" id="t-pnl-sub">нет активной сессии</div></div>
+      <div class="card tile"><div class="lbl">Реализовано сегодня, USDT</div><div class="val" id="t-today">—</div><div class="sub">с комиссиями</div></div>
+      <div class="card tile"><div class="lbl">Открытые позиции</div><div class="val" id="t-pos">—</div><div class="sub" id="t-pos-sub"></div></div>
+      <div class="card tile"><div class="lbl">До конца сессии</div><div class="val" id="t-left">—</div><div class="sub" id="t-left-sub"></div></div>
+      <div class="card tile"><div class="lbl">Сделок в сессии</div><div class="val" id="t-trades">—</div><div class="sub" id="t-trades-sub"></div></div>
+    </div>
+    <div class="cols">
+      <div class="card" id="session-card">
+        <h2>Сессия</h2>
+        <div id="session-active" hidden>
+          <dl class="kv" id="session-kv"></dl>
+          <div style="display:grid;gap:8px;margin-top:10px">
+            <div><div class="row note" style="justify-content:space-between"><span>Использовано лимита убытка</span><span id="lim-loss-txt"></span></div><div class="bar badfill"><i id="lim-loss"></i></div></div>
+            <div><div class="row note" style="justify-content:space-between"><span>Путь к цели прибыли</span><span id="lim-target-txt"></span></div><div class="bar"><i id="lim-target"></i></div></div>
+            <div><div class="row note" style="justify-content:space-between"><span>Время сессии</span><span id="lim-time-txt"></span></div><div class="bar"><i id="lim-time"></i></div></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" id="btn-pause" type="button">Пауза входов</button>
+            <button class="btn" id="btn-end" type="button">Завершить сессию</button>
+          </div>
+          <form id="set-form" class="grid" style="margin-top:8px">
+            <label class="f">Изменить параметр<select id="set-name">
+              <option value="max_loss_usdt">Макс. убыток, USDT</option><option value="profit_target_usdt">Цель прибыли, USDT</option>
+              <option value="duration_hours">Длительность, ч</option><option value="max_trades">Макс. сделок</option>
+              <option value="budget_usdt">Бюджет, USDT</option><option value="stop_loss_pct">Стоп-лосс, %</option>
+              <option value="take_profit_pct">Тейк-профит, %</option><option value="profit_lock">Profit lock (on/off)</option>
+              <option value="no_entry_last_hours">Без входов в последние, ч</option></select></label>
+            <label class="f">Значение<input id="set-value" autocomplete="off"></label>
+            <button class="btn" type="submit">Применить</button>
+          </form>
+        </div>
+        <form id="start-form" class="grid">
+          <label class="f">Бюджет, USDT<input name="budget_usdt" inputmode="decimal"></label>
+          <label class="f">Длительность, ч<input name="duration_hours" inputmode="decimal"></label>
+          <label class="f">Макс. убыток, USDT<input name="max_loss_usdt" inputmode="decimal"></label>
+          <label class="f">Цель прибыли, USDT<input name="profit_target_usdt" inputmode="decimal"></label>
+          <label class="f">Макс. сделок<input name="max_trades" inputmode="numeric"></label>
+          <label class="f">По окончании<select name="on_session_end"><option value="close_all">закрыть всё</option><option value="manage_only">довести до SL/TP</option></select></label>
+          <button class="btn primary" type="submit">Запустить сессию</button>
+        </form>
+        <p class="note" id="start-note">Пустые поля берутся из config.yaml. Значения выше потолков hard_caps отклоняются.</p>
+      </div>
+      <div class="card">
+        <h2>Открытые позиции</h2>
+        <div class="tbl"><table><thead><tr><th>Пара</th><th>Вход</th><th>Цена</th><th>PnL</th><th>Стоп</th><th>Тейк</th><th>Открыта</th></tr></thead><tbody id="pos-body"></tbody></table></div>
+        <h2 style="margin-top:8px">Последние события</h2>
+        <div class="feed" id="mini-feed" style="max-height:300px"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Накопленный PnL всех закрытых сделок, USDT</h2>
+      <p class="note">С комиссиями. Наведите курсор, чтобы увидеть значение на дату.</p>
+      <div class="chart" id="ov-equity"></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== TRADES -->
+  <section data-panel="trades" class="panel-grid" hidden>
+    <div class="card">
+      <div class="row"><h2 style="flex:1">Сделки</h2>
+        <label class="f">Пара<select id="tr-sym"><option value="">все</option></select></label>
+        <label class="f">Статус<select id="tr-status"><option value="">все</option><option value="open">открытые</option><option value="closed">закрытые</option><option value="failed">ошибки</option></select></label></div>
+      <div class="tbl scroll"><table><thead><tr><th>Вход</th><th class="l">Пара</th><th>Цена входа</th><th>Цена выхода</th><th>Сумма</th><th>PnL</th><th>PnL %</th><th>Комиссии</th><th class="l">Выход</th><th class="l">Причина входа</th></tr></thead><tbody id="tr-body"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== ANALYTICS -->
+  <section data-panel="analytics" class="panel-grid" hidden>
+    <div class="row"><label class="f">Период<select id="an-days"><option value="1">24 часа</option><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="0">всё время</option></select></label></div>
+    <div class="tiles" id="an-tiles"></div>
+    <div class="card"><h2>Накопленный PnL, USDT</h2><p class="note">Каждая точка — закрытая сделка, с комиссиями.</p><div class="chart" id="an-equity"></div></div>
+    <div class="cols">
+      <div class="card"><h2>PnL по дням, USDT</h2><div class="chart" id="an-daily"></div></div>
+      <div class="card"><h2>PnL по парам, USDT</h2><div class="chart" id="an-pairs"></div></div>
+    </div>
+    <div class="cols">
+      <div class="card"><h2>Как закрываются сделки</h2><div class="chart" id="an-exits"></div></div>
+      <div class="card"><h2>PnL по часу входа (локальное время), USDT</h2><div class="chart" id="an-hours"></div></div>
+    </div>
+    <div class="card"><h2>По парам</h2><div class="tbl"><table><thead><tr><th>Пара</th><th>Сделок</th><th>Винрейт</th><th>PnL</th><th>Комиссии</th></tr></thead><tbody id="an-pairs-tbl"></tbody></table></div></div>
+  </section>
+
+  <!-- ======================================================== MARKET -->
+  <section data-panel="market" class="panel-grid" hidden>
+    <div class="card">
+      <div class="row"><h2 style="flex:1">График</h2>
+        <label class="f">Пара<select id="mk-sym"></select></label>
+        <label class="f">Таймфрейм<select id="mk-tf"><option value="1m">1m</option><option value="5m" selected>5m</option><option value="1h">1h</option></select></label></div>
+      <p class="note">Свечи из базы бота. Синие треугольники — входы, круги — выходы (зелёный — в плюс, красный — в минус).</p>
+      <div class="chart tall" id="mk-chart"></div>
+    </div>
+    <div class="card"><h2>Цены</h2><div class="tbl"><table><thead><tr><th>Пара</th><th>Цена</th><th>24ч</th><th>Обновлено</th><th class="l">Торгуется</th></tr></thead><tbody id="mk-prices"></tbody></table></div></div>
+  </section>
+
+  <!-- ======================================================== SESSIONS -->
+  <section data-panel="sessions" class="panel-grid" hidden>
+    <div class="card"><h2>История сессий</h2>
+      <div class="tbl scroll"><table><thead><tr><th>#</th><th>Начало</th><th>Длит.</th><th>Бюджет</th><th>PnL</th><th>Комиссии</th><th>Сделок</th><th>Просадка</th><th class="l">Причина остановки</th></tr></thead><tbody id="ss-body"></tbody></table></div></div>
+    <div class="card" id="ss-report-card" hidden><h2 id="ss-report-title">Отчёт</h2><pre class="report" id="ss-report"></pre></div>
+  </section>
+
+  <!-- ======================================================== EVENTS -->
+  <section data-panel="events" class="panel-grid" hidden>
+    <div class="card">
+      <div class="row"><h2 style="flex:1">События</h2>
+        <label class="f">Тип<select id="ev-kind"><option value="">все</option><option value="trade">сделки</option><option value="session">сессии</option><option value="alert">алерты рынка</option><option value="report">отчёты</option><option value="warning">предупреждения</option><option value="error">ошибки</option><option value="info">прочее</option></select></label>
+        <button class="btn" id="btn-digest" type="button">Дайджест сейчас</button>
+        <button class="btn" id="btn-mute" type="button">Скрыть алерты на 1 ч</button></div>
+      <div class="feed" id="feed"></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== RESEARCH -->
+  <section data-panel="research" class="panel-grid" hidden>
+    <div id="rs-empty" class="card"><h2>Нет результатов бэктеста</h2><p class="note">Запустите <span class="mono">python scripts\research.py</span> или <span class="mono">python scripts\research_scalp.py</span> — результаты появятся здесь.</p></div>
+    <div id="rs-content" class="panel-grid"></div>
+  </section>
+
+  <!-- ======================================================== SETTINGS -->
+  <section data-panel="settings" class="panel-grid" hidden>
+    <div class="cols">
+      <div class="card"><h2>Стратегия</h2><dl class="kv" id="st-strategy"></dl></div>
+      <div class="card"><h2>Параметры сессии по умолчанию</h2><dl class="kv" id="st-defaults"></dl></div>
+      <div class="card"><h2>Жёсткие потолки (hard_caps)</h2><p class="note">Меняются только в config.yaml с перезапуском бота.</p><dl class="kv" id="st-caps"></dl></div>
+      <div class="card"><h2>Состояние компонентов</h2><dl class="kv" id="st-health"></dl></div>
+    </div>
+    <div class="card"><h2>Блокировки входов (protections)</h2><div id="st-locks" class="note">—</div></div>
+  </section>
+</main>
+
+<dialog id="stop-dialog">
+  <form method="dialog" style="display:grid;gap:12px">
+    <h2 style="margin:0;font-size:16px">Аварийная остановка</h2>
+    <p class="note" style="margin:0">Все открытые позиции будут закрыты по рынку, trader выключится. Снова включить его можно кнопкой в шапке.</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" value="cancel">Отмена</button><button class="btn danger" value="stop" id="stop-confirm">Закрыть всё и остановить</button></div>
+  </form>
+</dialog>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+const TOKEN = "__API_TOKEN__";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const fmt2 = (v) => v == null || isNaN(v) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(2);
+const fmt4 = (v) => v == null || isNaN(v) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(4);
+const num = (v, d = 2) => v == null || isNaN(v) ? "—" : Number(v).toFixed(d);
+const price = (v) => v == null ? "—" : Number(v).toPrecision(6).replace(/\.?0+$/, "");
+const tsfmt = (t, withDate = true) => {
+  if (!t) return "—";
+  const d = new Date(t * 1000);
+  const hm = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  return withDate ? `${d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })} ${hm}` : hm;
+};
+const dur = (sec) => { sec = Math.max(0, sec | 0); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return `${h}ч ${String(m).padStart(2, "0")}м`; };
+const cls = (v) => v > 0 ? "pos" : v < 0 ? "neg" : "";
+const KIND = { take_profit: "тейк-профит", stop_loss: "стоп-лосс", trailing_stop: "трейлинг", time_limit: "лимит времени", session: "конец сессии", other: "прочее" };
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+async function api(path, body) {
+  const opt = { headers: { "X-Token": TOKEN } };
+  if (body !== undefined) { opt.method = "POST"; opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(path, opt);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+let toastTimer;
+function toast(text) { const t = $("#toast"); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 6000); }
+async function act(path, body) { try { const r = await api(path, body); toast(r.message || "Готово"); refreshState(); return r; } catch (e) { toast("Ошибка: " + e.message); } }
+function td(text, className) { const c = document.createElement("td"); c.textContent = text; if (className) c.className = className; return c; }
+function rowOf(cells) { const tr = document.createElement("tr"); cells.forEach(c => tr.appendChild(c)); return tr; }
+function emptyRow(tbody, cols, text) { tbody.replaceChildren(rowOf([Object.assign(td(text, "empty"), { colSpan: cols })])); }
+
+/* ------------------------------------------------------------------ SVG charts (no libraries) */
+const NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function niceTicks(lo, hi, n = 5, integer = false) {
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const step0 = (hi - lo) / n, mag = Math.pow(10, Math.floor(Math.log10(step0))), r = step0 / mag;
+  let step = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag;
+  if (integer) step = Math.max(1, Math.round(step));
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toFixed(10));
+  return { ticks: out, lo: Math.min(lo, out[0] ?? lo), hi: Math.max(hi, out[out.length - 1] ?? hi) };
+}
+function textWidth(svg, s) { const t = svgEl("text", { visibility: "hidden" }, svg); t.textContent = s; const w = t.getComputedTextLength(); t.remove(); return w; }
+function tipShow(el, x, y, head, lines) {
+  let t = el.querySelector(":scope > .tip"); if (!t) { t = document.createElement("div"); t.className = "tip"; el.appendChild(t); }
+  t.replaceChildren(); const h = document.createElement("div"); h.className = "h"; h.textContent = head; t.appendChild(h);
+  lines.forEach(([color, label, value]) => { const d = document.createElement("div"); if (color) { const k = document.createElement("i"); k.style.cssText = `display:inline-block;width:10px;height:2px;background:${color};margin-right:6px;vertical-align:middle`; d.appendChild(k); }
+    const b = document.createElement("b"); b.textContent = value; d.appendChild(b); d.append(" " + label); t.appendChild(d); });
+  t.hidden = false; const w = el.clientWidth, tw = t.offsetWidth; t.style.left = Math.max(0, Math.min(w - tw, x + 12)) + "px"; t.style.top = Math.max(0, y - 10) + "px";
+}
+function tipHide(el) { const t = el.querySelector(":scope > .tip"); if (t) t.hidden = true; }
+function emptyChart(el, text) { el.replaceChildren(); const p = document.createElement("div"); p.className = "empty"; p.textContent = text; el.appendChild(p); }
+
+/* line chart: series = [{name, color, points:[[x(ms), y]]}] */
+function lineChart(el, series, { height = 240, yfmt = fmt2, xfmt = (x) => new Date(x).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }), zero = true } = {}) {
+  const pts = series.flatMap(s => s.points);
+  if (pts.length < 2) return emptyChart(el, "Пока недостаточно данных");
+  el.replaceChildren(); const W = Math.max(300, el.clientWidth), H = height;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` }, el);
+  let ylo = Math.min(...pts.map(p => p[1])), yhi = Math.max(...pts.map(p => p[1])); if (zero) { ylo = Math.min(0, ylo); yhi = Math.max(0, yhi); }
+  const t = niceTicks(ylo, yhi, 5);
+  const left = Math.max(...t.ticks.map(v => textWidth(svg, yfmt(v)))) + 12, right = 10, top = 10, bottom = 24;
+  const xlo = Math.min(...pts.map(p => p[0])), xhi = Math.max(...pts.map(p => p[0]));
+  const X = (x) => left + (xhi === xlo ? 0 : (x - xlo) / (xhi - xlo)) * (W - left - right);
+  const Y = (y) => top + (t.hi - y) / (t.hi - t.lo || 1) * (H - top - bottom);
+  t.ticks.forEach(v => { svgEl("line", { x1: left, x2: W - right, y1: Y(v), y2: Y(v), stroke: v === 0 ? css("--muted") : css("--grid"), "stroke-width": 1 }, svg);
+    const tx = svgEl("text", { x: left - 6, y: Y(v), dy: "0.32em", "text-anchor": "end" }, svg); tx.textContent = v === 0 ? "0" : yfmt(v); });
+  const nx = Math.max(2, Math.floor((W - left) / 110));
+  for (let i = 0; i <= nx; i++) { const x = xlo + (xhi - xlo) * i / nx; const tx = svgEl("text", { x: X(x), y: H - 6, "text-anchor": i === 0 ? "start" : i === nx ? "end" : "middle" }, svg); tx.textContent = xfmt(x); }
+  series.forEach(s => { if (!s.points.length) return; svgEl("path", { d: s.points.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(""), fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg); });
+  const rule = svgEl("line", { y1: top, y2: H - bottom, stroke: css("--muted"), visibility: "hidden" }, svg);
+  const hit = svgEl("rect", { x: left, y: 0, width: W - left - right, height: H, fill: "transparent" }, svg);
+  hit.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect(), mx = (ev.clientX - r.left) * W / r.width; const xv = xlo + (mx - left) / (W - left - right) * (xhi - xlo);
+    const lines = series.map(s => { let best = null; for (const p of s.points) { if (p[0] <= xv) best = p; else break; } return [s.color, s.name, best ? yfmt(best[1]) : "—"]; });
+    rule.setAttribute("x1", mx); rule.setAttribute("x2", mx); rule.setAttribute("visibility", "visible");
+    tipShow(el, ev.clientX - el.getBoundingClientRect().left, ev.clientY - el.getBoundingClientRect().top, new Date(xv).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }), lines);
+  });
+  hit.addEventListener("pointerleave", () => { rule.setAttribute("visibility", "hidden"); tipHide(el); });
+}
+
+/* bar chart (vertical when horizontal=false): rows = [{label, value, title}] ; color by sign */
+function barChart(el, rows, { horizontal = false, height, yfmt = fmt2, signColor = true } = {}) {
+  if (!rows.length) return emptyChart(el, "Пока нет данных");
+  el.replaceChildren(); const W = Math.max(300, el.clientWidth);
+  const H = height || (horizontal ? 24 + rows.length * 26 : 240);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` }, el);
+  const vals = rows.map(r => r.value); const t = niceTicks(Math.min(0, ...vals), Math.max(0, ...vals), 4, !signColor);
+  const color = (v) => !signColor ? css("--accent") : v >= 0 ? css("--accent") : css("--bad");
+  if (horizontal) {
+    const lw = Math.max(...rows.map(r => textWidth(svg, r.label))) + 10, vw = Math.max(...rows.map(r => textWidth(svg, yfmt(r.value)))) + 8;
+    const X = (v) => lw + vw + (v - t.lo) / (t.hi - t.lo || 1) * (W - lw - 2 * vw);
+    const band = (H - 24) / rows.length;
+    svgEl("line", { x1: X(0), x2: X(0), y1: 0, y2: H - 20, stroke: css("--muted") }, svg);
+    rows.forEach((r, i) => { const y = i * band + band * 0.2, h = Math.min(18, band * 0.6);
+      const x0 = Math.min(X(0), X(r.value)), w = Math.max(1, Math.abs(X(r.value) - X(0)));
+      const rect = svgEl("rect", { x: x0, y, width: w, height: h, rx: 4, fill: color(r.value) }, svg);
+      const lab = svgEl("text", { x: 0, y: y + h / 2, dy: "0.32em", fill: css("--fg") }, svg); lab.textContent = r.label;
+      const vt = svgEl("text", { x: r.value >= 0 ? X(r.value) + 4 : X(r.value) - 4, y: y + h / 2, dy: "0.32em", "text-anchor": r.value >= 0 ? "start" : "end" }, svg); vt.textContent = yfmt(r.value);
+      rect.addEventListener("pointermove", (ev) => tipShow(el, ev.clientX - el.getBoundingClientRect().left, ev.clientY - el.getBoundingClientRect().top, r.label, [[null, r.title || "", yfmt(r.value)]]));
+      rect.addEventListener("pointerleave", () => tipHide(el)); });
+    t.ticks.forEach(v => { const tx = svgEl("text", { x: X(v), y: H - 4, "text-anchor": "middle" }, svg); tx.textContent = v === 0 ? "0" : yfmt(v); });
+    return;
+  }
+  const left = Math.max(...t.ticks.map(v => textWidth(svg, yfmt(v)))) + 12, bottom = 24, top = 8;
+  const Y = (v) => top + (t.hi - v) / (t.hi - t.lo || 1) * (H - top - bottom);
+  t.ticks.forEach(v => { svgEl("line", { x1: left, x2: W, y1: Y(v), y2: Y(v), stroke: v === 0 ? css("--muted") : css("--grid") }, svg);
+    const tx = svgEl("text", { x: left - 6, y: Y(v), dy: "0.32em", "text-anchor": "end" }, svg); tx.textContent = v === 0 ? "0" : yfmt(v); });
+  const band = (W - left) / rows.length, bw = Math.max(2, Math.min(24, band - 2));
+  const every = Math.ceil(rows.length / Math.max(1, Math.floor((W - left) / 46)));
+  rows.forEach((r, i) => { const x = left + i * band + (band - bw) / 2;
+    const rect = svgEl("rect", { x, y: Math.min(Y(0), Y(r.value)), width: bw, height: Math.max(1, Math.abs(Y(r.value) - Y(0))), rx: Math.min(4, bw / 2), fill: color(r.value) }, svg);
+    if (i % every === 0) { const tx = svgEl("text", { x: x + bw / 2, y: H - 6, "text-anchor": "middle" }, svg); tx.textContent = r.label; }
+    rect.addEventListener("pointermove", (ev) => tipShow(el, ev.clientX - el.getBoundingClientRect().left, ev.clientY - el.getBoundingClientRect().top, r.label, [[null, r.title || "", yfmt(r.value)]]));
+    rect.addEventListener("pointerleave", () => tipHide(el)); });
+}
+
+/* candle chart with trade markers */
+function candleChart(el, data) {
+  const c = data.candles; if (!c || c.length < 2) return emptyChart(el, "Нет свечей в базе для этой пары и таймфрейма");
+  el.replaceChildren(); const W = Math.max(300, el.clientWidth), H = 320;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` }, el);
+  const lo = Math.min(...c.map(r => r[3])), hi = Math.max(...c.map(r => r[2])); const t = niceTicks(lo, hi, 5);
+  const left = Math.max(...t.ticks.map(v => textWidth(svg, price(v)))) + 12, right = 8, top = 8, bottom = 24;
+  const step = (c[c.length - 1][0] - c[0][0]) / (c.length - 1) || 60000;
+  const x0 = c[0][0], x1 = c[c.length - 1][0] + step;
+  const X = (ms) => left + (ms - x0) / (x1 - x0) * (W - left - right);
+  const Y = (v) => top + (t.hi - v) / (t.hi - t.lo || 1) * (H - top - bottom);
+  t.ticks.forEach(v => { svgEl("line", { x1: left, x2: W - right, y1: Y(v), y2: Y(v), stroke: css("--grid") }, svg); const tx = svgEl("text", { x: left - 6, y: Y(v), dy: "0.32em", "text-anchor": "end" }, svg); tx.textContent = price(v); });
+  const bw = Math.max(1, (W - left - right) / c.length * 0.7);
+  c.forEach(r => { const up = r[4] >= r[1], col = up ? css("--accent") : css("--muted-series"), x = X(r[0] + step / 2);
+    svgEl("line", { x1: x, x2: x, y1: Y(r[2]), y2: Y(r[3]), stroke: col }, svg);
+    svgEl("rect", { x: x - bw / 2, y: Math.min(Y(r[1]), Y(r[4])), width: bw, height: Math.max(1, Math.abs(Y(r[1]) - Y(r[4]))), fill: col }, svg); });
+  const n = Math.max(2, Math.floor((W - left) / 110));
+  for (let i = 0; i <= n; i++) { const ms = x0 + (x1 - x0) * i / n; const tx = svgEl("text", { x: X(ms), y: H - 6, "text-anchor": i === 0 ? "start" : i === n ? "end" : "middle" }, svg); tx.textContent = new Date(ms).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); }
+  data.trades.forEach(tr => {
+    if (tr.entry_ts * 1000 >= x0 && tr.entry) { const x = X(tr.entry_ts * 1000), y = Y(tr.entry);
+      svgEl("path", { d: `M${x},${y - 2} l-6,10 h12 z`, fill: css("--accent"), stroke: css("--panel"), "stroke-width": 1.5 }, svg); }
+    if (tr.exit_ts && tr.exit_ts * 1000 >= x0 && tr.exit) { svgEl("circle", { cx: X(tr.exit_ts * 1000), cy: Y(tr.exit), r: 5, fill: (tr.pnl || 0) >= 0 ? css("--ok") : css("--bad"), stroke: css("--panel"), "stroke-width": 2 }, svg); }
+  });
+  const hit = svgEl("rect", { x: left, y: 0, width: W - left - right, height: H, fill: "transparent" }, svg);
+  hit.addEventListener("pointermove", (ev) => { const r = svg.getBoundingClientRect(), mx = (ev.clientX - r.left) * W / r.width;
+    const ms = x0 + (mx - left) / (W - left - right) * (x1 - x0); const k = c.reduce((a, b) => Math.abs(b[0] - ms) < Math.abs(a[0] - ms) ? b : a);
+    tipShow(el, ev.clientX - el.getBoundingClientRect().left, ev.clientY - el.getBoundingClientRect().top, new Date(k[0]).toLocaleString("ru-RU"),
+      [[null, "открытие", price(k[1])], [null, "макс.", price(k[2])], [null, "мин.", price(k[3])], [null, "закрытие", price(k[4])]]); });
+  hit.addEventListener("pointerleave", () => tipHide(el));
+}
+
+/* ------------------------------------------------------------------ state / overview */
+let STATE = null, lastEventId = 0, startFormFilled = false;
+async function refreshState() {
+  try { STATE = await api("/api/state"); setConn(true); } catch (e) { setConn(false, e.message); return; }
+  const s = STATE;
+  const mode = $("#mode"); mode.textContent = s.mode === "LIVE" ? "РЕАЛЬНЫЙ СЧЁТ" : "DEMO"; mode.className = "badge " + (s.mode === "LIVE" ? "live" : "demo");
+  const tr = $("#trader"); tr.textContent = s.trader_enabled ? (s.paused ? "trader: пауза" : "trader: ВКЛ") : "trader: выкл"; tr.className = "badge " + (s.trader_enabled ? (s.paused ? "warn" : "on") : "off");
+  $("#btn-trader").textContent = s.trader_enabled ? "Выключить trader" : "Включить trader";
+  $("#live-box").hidden = !(s.live && !s.live_confirmed && s.live_code);
+  if (s.live_code) $("#live-text").textContent = `В .env включён реальный счёт. Торговля заблокирована, пока вы не введёте код ${s.live_code}. Если это ошибка — выключите OKX_LIVE_TRADING и перезапустите бота.`;
+  const bl = $("#blockers-list"); bl.replaceChildren(...s.blockers.map(b => Object.assign(document.createElement("li"), { textContent: b })));
+  $("#blockers").hidden = !s.blockers.length;
+  $("#t-today").textContent = fmt4(s.today_realized); $("#t-today").className = "val " + cls(s.today_realized);
+  const ss = s.session;
+  $("#session-active").hidden = !ss; $("#start-form").hidden = !!ss; $("#start-note").hidden = !!ss;
+  if (!startFormFilled && s.defaults) { const f = $("#start-form"); ["budget_usdt", "duration_hours", "max_loss_usdt", "profit_target_usdt", "max_trades"].forEach(k => { if (s.defaults[k] != null) f.elements[k].placeholder = s.defaults[k]; }); f.elements.on_session_end.value = s.defaults.on_session_end; startFormFilled = true; }
+  if (ss) {
+    const now = s.now; $("#t-pnl").textContent = fmt4(ss.total); $("#t-pnl").className = "val " + cls(ss.total);
+    $("#t-pnl-sub").textContent = `реализ. ${fmt4(ss.realized)} · нереализ. ${fmt4(ss.unrealized)} · комиссии ${num(ss.fees, 4)}`;
+    $("#t-left").textContent = dur(ss.ends_at - now); $("#t-left-sub").textContent = `сессия #${ss.id}, ${ss.status}`;
+    $("#t-trades").textContent = `${ss.trades_opened}`; $("#t-trades-sub").textContent = `осталось ${ss.trades_left}, побед ${ss.wins}, поражений ${ss.losses}`;
+    $("#t-pos").textContent = ss.positions.length; $("#t-pos-sub").textContent = `в позициях ${num(ss.open_cost)} USDT, свободно ${num(ss.budget_free)}`;
+    const p = ss.params; const kv = $("#session-kv"); kv.replaceChildren();
+    [["Бюджет", `${p.budget_usdt} USDT`], ["Период", `${tsfmt(ss.started_at)} → ${tsfmt(ss.ends_at)}`], ["Макс. убыток", `${num(ss.max_loss)} USDT`],
+     ["Цель", ss.target != null ? `${num(ss.target)} USDT${ss.profit_lock ? " (profit lock)" : ""}` : "—"], ["Пик / просадка", `${fmt4(ss.peak)} / ${num(ss.max_dd, 4)}`],
+     ["Убытков подряд", `${ss.consecutive_losses} из ${p.max_consecutive_losses}`]].forEach(([k, v]) => { kv.append(Object.assign(document.createElement("dt"), { textContent: k }), Object.assign(document.createElement("dd"), { textContent: v })); });
+    const used = Math.max(0, -ss.total) / ss.max_loss; $("#lim-loss").style.width = Math.min(100, used * 100) + "%"; $("#lim-loss-txt").textContent = `${num(Math.max(0, -ss.total), 4)} из ${num(ss.max_loss)}`;
+    const tg = ss.target ? Math.max(0, ss.total) / ss.target : 0; $("#lim-target").style.width = Math.min(100, tg * 100) + "%"; $("#lim-target-txt").textContent = ss.target ? `${num(Math.max(0, ss.total), 4)} из ${num(ss.target)}` : "цель не задана";
+    const tt = (now - ss.started_at) / (ss.ends_at - ss.started_at); $("#lim-time").style.width = Math.min(100, tt * 100) + "%"; $("#lim-time-txt").textContent = `осталось ${dur(ss.ends_at - now)}`;
+    $("#btn-pause").textContent = ss.paused ? "Возобновить входы" : "Пауза входов";
+  } else {
+    ["#t-pnl", "#t-left", "#t-trades", "#t-pos"].forEach(id => { $(id).textContent = "—"; $(id).className = "val"; });
+    $("#t-pnl-sub").textContent = "нет активной сессии"; $("#t-left-sub").textContent = ""; $("#t-trades-sub").textContent = ""; $("#t-pos-sub").textContent = "";
+  }
+  const pb = $("#pos-body");
+  if (ss && ss.positions.length) pb.replaceChildren(...ss.positions.map(p => rowOf([td(p.symbol), td(price(p.entry)), td(price(p.price)), td(fmt4(p.pnl), cls(p.pnl)), td(price(p.stop)), td(price(p.target)), td(tsfmt(p.opened_at, false) + (p.oco ? " · OCO" : ""))])));
+  else emptyRow(pb, 7, "Нет открытых позиций");
+  // market tab data that comes with the state
+  const sel = $("#mk-sym"), trSel = $("#tr-sym");
+  if (!sel.options.length) s.prices.forEach(p => { sel.add(new Option(p.symbol, p.symbol)); trSel.add(new Option(p.symbol, p.symbol)); });
+  if (activeTab === "market") renderPrices(); if (activeTab === "settings") renderSettings();
+}
+function setConn(ok, msg) { const c = $("#conn"); c.replaceChildren(Object.assign(document.createElement("span"), { className: "dot " + (ok ? "ok" : "bad") }), document.createTextNode(ok ? " бот на связи" : " нет связи: " + (msg || ""))); }
+
+/* ------------------------------------------------------------------ events */
+function evNode(e) { const d = document.createElement("div"); d.className = "ev " + e.kind; const t = document.createElement("time"); t.textContent = tsfmt(e.ts); const p = document.createElement("pre"); p.textContent = e.text; d.append(t, p); return d; }
+let feedCache = [];
+async function refreshEvents() {
+  try { const evs = await api(`/api/events?after=${lastEventId}`); if (evs.length) { lastEventId = evs[evs.length - 1].id; feedCache = feedCache.concat(evs).slice(-300); } } catch (e) { return; }
+  const kind = $("#ev-kind").value;
+  $("#feed").replaceChildren(...feedCache.filter(e => !kind || e.kind === kind).slice().reverse().map(evNode));
+  $("#mini-feed").replaceChildren(...feedCache.slice(-8).reverse().map(evNode));
+}
+
+/* ------------------------------------------------------------------ trades / analytics */
+async function renderTrades() {
+  const rows = await api("/api/trades?limit=1000"); const sym = $("#tr-sym").value, st = $("#tr-status").value;
+  const list = rows.filter(r => (!sym || r.symbol === sym) && (!st || r.status === st)); const tb = $("#tr-body");
+  if (!list.length) return emptyRow(tb, 10, "Сделок пока нет");
+  tb.replaceChildren(...list.map(r => rowOf([td(tsfmt(r.entry_ts)), td(r.symbol, "l"), td(price(r.entry_price)), td(r.exit_price ? price(r.exit_price) : (r.status === "open" ? "открыта" : "—")),
+    td(num(r.cost_usdt, 2)), td(fmt4(r.pnl_usdt), cls(r.pnl_usdt)), td(r.pnl_pct != null ? fmt2(r.pnl_pct) + "%" : "—", cls(r.pnl_pct)),
+    td(num((r.entry_fee_usdt || 0) + (r.exit_fee_usdt || 0), 4)), td(r.status === "failed" ? "ошибка" : (KIND[r.exit_kind] || r.exit_kind || "—"), "l"), td(r.entry_reason || r.exit_reason || "", "wrap")])));
+}
+async function renderAnalytics() {
+  const a = await api(`/api/analytics?days=${$("#an-days").value}`); const s = a.summary;
+  const tiles = [["Сделок", s.trades, ""], ["Винрейт", s.trades ? num(s.winrate, 0) + "%" : "—", ""], ["PnL, USDT", fmt4(s.pnl), cls(s.pnl)],
+    ["До комиссий, USDT", fmt4(s.gross), cls(s.gross)], ["Комиссии, USDT", num(s.fees, 4), ""], ["Profit factor", s.profit_factor != null ? num(s.profit_factor) : "—", ""],
+    ["Ожидание/сделку", fmt4(s.expectancy), cls(s.expectancy)], ["Макс. просадка", num(s.max_dd, 4), ""], ["Удержание, мин", s.avg_hold_min != null ? num(s.avg_hold_min, 0) : "—", ""]];
+  $("#an-tiles").replaceChildren(...tiles.map(([l, v, c]) => { const d = document.createElement("div"); d.className = "card tile"; d.innerHTML = '<div class="lbl"></div><div class="val"></div>'; d.children[0].textContent = l; d.children[1].textContent = v; d.children[1].className = "val " + c; return d; }));
+  lineChart($("#an-equity"), [{ name: "PnL", color: css("--accent"), points: a.equity.map(p => [p[0] * 1000, p[1]]) }], { yfmt: fmt4 });
+  barChart($("#an-daily"), a.daily.map(d => ({ label: d.date.slice(5), value: d.pnl, title: `сделок ${d.trades}, комиссии ${num(d.fees, 4)}` })), { yfmt: fmt4 });
+  barChart($("#an-pairs"), a.pairs.map(p => ({ label: p.symbol.replace("/USDT", ""), value: p.pnl, title: `сделок ${p.trades}, винрейт ${num(p.winrate, 0)}%` })), { horizontal: true, yfmt: fmt4 });
+  barChart($("#an-exits"), Object.entries(a.exits).map(([k, v]) => ({ label: KIND[k] || k, value: v, title: "сделок" })), { horizontal: true, yfmt: (v) => String(Math.round(v)), signColor: false });
+  barChart($("#an-hours"), a.hours.map(h => ({ label: String(h.hour), value: h.pnl, title: `сделок ${h.trades}` })), { yfmt: fmt4 });
+  const tb = $("#an-pairs-tbl"); if (!a.pairs.length) emptyRow(tb, 5, "Нет закрытых сделок за период");
+  else tb.replaceChildren(...a.pairs.map(p => rowOf([td(p.symbol), td(p.trades), td(num(p.winrate, 0) + "%"), td(fmt4(p.pnl), cls(p.pnl)), td(num(p.fees, 4))])));
+}
+async function renderOverviewEquity() { const a = await api("/api/analytics?days=0"); lineChart($("#ov-equity"), [{ name: "PnL", color: css("--accent"), points: a.equity.map(p => [p[0] * 1000, p[1]]) }], { yfmt: fmt4 }); }
+
+/* ------------------------------------------------------------------ market */
+function renderPrices() { if (!STATE) return; $("#mk-prices").replaceChildren(...STATE.prices.map(p => rowOf([td(p.symbol), td(price(p.last)), td(p.change24 != null ? fmt2(p.change24) + "%" : "—", cls(p.change24)),
+  td(p.age == null ? "нет данных" : p.age < 60 ? `${Math.round(p.age)} с назад` : `${Math.round(p.age / 60)} мин назад`, p.age != null && p.age > 60 ? "neg" : ""), td(p.trading ? "да" : "только мониторинг", "l")]))); }
+async function renderMarket() { renderPrices(); const sym = $("#mk-sym").value || "BTC/USDT", tf = $("#mk-tf").value; candleChart($("#mk-chart"), await api(`/api/candles?symbol=${encodeURIComponent(sym)}&tf=${tf}&limit=${tf === "1h" ? 240 : 288}`)); }
+
+/* ------------------------------------------------------------------ sessions */
+async function renderSessions() {
+  const rows = await api("/api/sessions"); const tb = $("#ss-body");
+  if (!rows.length) return emptyRow(tb, 9, "Сессий пока не было");
+  tb.replaceChildren(...rows.map(r => { const tr = rowOf([td("#" + r.id), td(tsfmt(r.started_at)), td(dur((r.ended_at || STATE?.now || r.ends_at) - r.started_at)), td(num(r.budget_usdt)), td(fmt4(r.realized_pnl), cls(r.realized_pnl)),
+    td(num(r.fees, 4)), td(r.trades), td(num(r.max_drawdown, 4)), td(r.status === "ended" ? (r.stop_reason_ru || r.stop_reason || "—") : "идёт", "l")]);
+    tr.style.cursor = r.report ? "pointer" : ""; tr.tabIndex = r.report ? 0 : -1;
+    const show = () => { if (!r.report) return; $("#ss-report-card").hidden = false; $("#ss-report-title").textContent = `Отчёт сессии #${r.id}`; $("#ss-report").textContent = r.report; };
+    tr.addEventListener("click", show); tr.addEventListener("keydown", (e) => { if (e.key === "Enter") show(); }); return tr; }));
+}
+
+/* ------------------------------------------------------------------ research */
+async function renderResearch() {
+  const r = await api("/api/research"); const box = $("#rs-content"); box.replaceChildren();
+  $("#rs-empty").hidden = Object.keys(r).length > 0;
+  const card = (title, note) => { const c = document.createElement("div"); c.className = "card"; const h = document.createElement("h2"); h.textContent = title; c.appendChild(h); if (note) { const p = document.createElement("p"); p.className = "note"; p.textContent = note; c.appendChild(p); } box.appendChild(c); return c; };
+  const table = (parent, head, rows) => { const w = document.createElement("div"); w.className = "tbl"; const t = document.createElement("table"); const th = document.createElement("thead"); th.appendChild(rowOf(head.map(h => Object.assign(document.createElement("th"), { textContent: h })))); const tb = document.createElement("tbody"); rows.forEach(r => tb.appendChild(rowOf(r))); t.append(th, tb); w.appendChild(t); parent.appendChild(w); };
+  const LBL = { baseline: "Текущая стратегия", atr_exits: "H1: SL/TP по ATR", min_atr: "H2: фильтр ATR", btc_regime: "H3: режим BTC", breakout_atr: "H4: пробой + ATR", final: "Принятая комбинация",
+    scalp_revert: "S1: 5m возврат к среднему", scalp_breakout: "S2: 5m импульсный пробой" };
+  for (const [name, res] of Object.entries(r)) {
+    if (res.dev) { const c = card(name === "scalp_results" ? "5-минутные стратегии: период разработки" : "Часовая стратегия: период разработки (2019–2022)", "PnL в USDT с комиссией 0.1% и проскальзыванием 0.05% на сторону.");
+      table(c, ["Вариант", "PnL", "Сделок", "Винрейт", "Просадка", "Комиссии", "Решение"], Object.entries(res.dev).map(([k, d]) => [td(LBL[k] || k), td(fmt2(d.metrics.pnl), cls(d.metrics.pnl)), td(d.metrics.trades), td(num(d.metrics.winrate, 0) + "%"), td(num(d.metrics.max_dd)), td(num(d.metrics.fees)), td(d.accepted == null ? "—" : d.accepted ? "принят" : "отклонён")])); }
+    if (res.holdout) { const c = card(name === "scalp_results" ? "5-минутные стратегии: отложенная проверка" : "Часовая стратегия: отложенная проверка (2023 → сегодня)", "Запускалась один раз для итоговой конфигурации.");
+      table(c, ["Конфигурация", "PnL", "Сделок", "Винрейт", "Просадка", "Комиссии", "P(PnL>0) Monte Carlo"], Object.entries(res.holdout).map(([k, h]) => [td(LBL[k] || k), td(fmt2(h.metrics.pnl), cls(h.metrics.pnl)), td(h.metrics.trades), td(num(h.metrics.winrate, 0) + "%"), td(num(h.metrics.max_dd)), td(num(h.metrics.fees)), td(h.mc && h.mc.prob_positive != null ? num(h.mc.prob_positive * 100, 0) + "%" : "—")])); }
+    if (res.cost_sensitivity) { const c = card("Результат при разных издержках (отложенный период)", "Справочно. Без издержек видно, есть ли у сигнала преимущество до комиссий.");
+      table(c, ["Конфигурация", "Издержки", "PnL", "Сделок"], res.cost_sensitivity.map(x => [td(LBL[x.config] || x.config), td(x.case, "l"), td(fmt2(x.pnl), cls(x.pnl)), td(x.trades)])); }
+    if (res.random_control) { const rc = res.random_control; const c = card("Сравнение со случайными входами", `Стратегия лучше ${num(rc.percentile * 100, 0)}% прогонов со случайными входами при тех же выходах и лимитах.`);
+      barChart(Object.assign(c.appendChild(document.createElement("div")), { className: "chart" }), rc.pnls.slice().sort((a, b) => a - b).map((v, i) => ({ label: String(i + 1), value: v, title: "случайный прогон" })), { yfmt: fmt2 }); }
+  }
+}
+
+/* ------------------------------------------------------------------ settings */
+function kvFill(el, pairs) { el.replaceChildren(); pairs.forEach(([k, v]) => el.append(Object.assign(document.createElement("dt"), { textContent: k }), Object.assign(document.createElement("dd"), { textContent: v }))); }
+function renderSettings() {
+  if (!STATE) return; const s = STATE.strategy, e = STATE.exits;
+  const modes = { pullback: "откат RSI на 1h", breakout: "пробой 20-часового максимума", scalp_revert: "5m: возврат к среднему (Боллинджер + RSI)", scalp_breakout: "5m: импульсный пробой с объёмом" };
+  kvFill($("#st-strategy"), [["Вход", modes[s.entry_mode] || s.entry_mode], ["Проверка входа", `на закрытии каждой ${s.signal_tf}-свечи`], ["Фильтр тренда", `EMA${s.ema_fast} > EMA${s.ema_slow} на ${s.trend_tf}`],
+    ["Фильтр BTC", s.btc_regime ? "да" : "нет"], ["Выходы", s.entry_mode.startsWith("scalp") ? `SL ${s.scalp_sl_atr}×ATR, TP ${s.scalp_tp_atr}×ATR` : s.exit_mode === "atr" ? `SL ${s.atr_sl_mult}×ATR, TP ${s.atr_tp_mult}×ATR` : "SL/TP сессии"],
+    ["Лимит удержания", e.time_limit_hours ? `${e.time_limit_hours} ч` : "нет"], ["Трейлинг / безубыток", `${e.trailing_enabled ? "да" : "нет"} / ${e.breakeven_enabled ? "да" : "нет"}`]]);
+  const d = STATE.defaults; kvFill($("#st-defaults"), [["Бюджет", `${d.budget_usdt} USDT`], ["Длительность", `${d.duration_hours} ч`], ["Макс. убыток", `${d.max_loss_usdt ?? "—"} USDT`], ["Цель", `${d.profit_target_usdt ?? "—"} USDT`],
+    ["Макс. сделок", d.max_trades], ["Размер позиции", `${d.position_size_pct}% бюджета`], ["Позиций одновременно", d.max_open_positions], ["Без входов в конце", `${d.no_entry_last_hours} ч`], ["По окончании", d.on_session_end === "close_all" ? "закрыть всё" : "довести до SL/TP"]]);
+  const c = STATE.hard_caps, dc = STATE.daily_caps; kvFill($("#st-caps"), [["Бюджет сессии ≤", `${c.max_budget_usdt} USDT`], ["Убыток сессии ≤", `${c.max_loss_usdt} USDT`], ["Длительность ≤", `${c.max_duration_hours} ч`], ["Сделок за сессию ≤", c.max_trades_per_session],
+    ["Сумма бюджетов за день ≤", `${dc.daily_budget_cap_usdt} USDT`], ["Убыток за день ≤", `${dc.daily_loss_cap_usdt} USDT`]]);
+  kvFill($("#st-health"), Object.entries(STATE.health).map(([k, v]) => [k, `${Math.round(v)} с назад`]).concat(Object.entries(STATE.errors).map(([k, v]) => ["ошибка " + k, v])));
+  $("#st-locks").textContent = STATE.locks.length ? STATE.locks.map(l => `${l.reason} — до ${tsfmt(l.until)}`).join("\n") : "Защиты выключены или активных блокировок нет.";
+}
+
+/* ------------------------------------------------------------------ tabs & controls */
+let activeTab = "overview";
+const RENDER = { overview: renderOverviewEquity, trades: renderTrades, analytics: renderAnalytics, market: renderMarket, sessions: renderSessions, research: renderResearch, settings: async () => renderSettings(), events: async () => {} };
+function showTab(name) { activeTab = name; $$(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tab === name))); $$("section[data-panel]").forEach(s => s.hidden = s.dataset.panel !== name);
+  try { history.replaceState(null, "", "#" + name); } catch (e) {} RENDER[name]().catch(e => toast("Ошибка: " + e.message)); }
+$$(".tab").forEach(t => t.addEventListener("click", () => showTab(t.dataset.tab)));
+$("#tr-sym").addEventListener("change", renderTrades); $("#tr-status").addEventListener("change", renderTrades);
+$("#an-days").addEventListener("change", renderAnalytics); $("#mk-sym").addEventListener("change", renderMarket); $("#mk-tf").addEventListener("change", renderMarket);
+$("#ev-kind").addEventListener("change", refreshEvents);
+$("#btn-trader").addEventListener("click", () => act("/api/trader", { enabled: !(STATE && STATE.trader_enabled) }));
+$("#btn-stop").addEventListener("click", () => $("#stop-dialog").showModal());
+$("#stop-dialog").addEventListener("close", () => { if ($("#stop-dialog").returnValue === "stop") act("/api/stop", { confirm: "STOP" }); });
+$("#btn-pause").addEventListener("click", () => act("/api/pause", { paused: !(STATE && STATE.session && STATE.session.paused) }));
+$("#btn-end").addEventListener("click", () => act("/api/session/end", {}));
+$("#btn-digest").addEventListener("click", () => act("/api/report", { kind: "digest" }).then(refreshEvents));
+$("#btn-mute").addEventListener("click", () => act("/api/mute", { minutes: 60 }));
+$("#start-form").addEventListener("submit", (e) => { e.preventDefault(); const params = {}; new FormData(e.target).forEach((v, k) => { if (String(v).trim() !== "") params[k] = String(v).trim(); }); act("/api/session/start", { params }).then(refreshEvents); });
+$("#set-form").addEventListener("submit", (e) => { e.preventDefault(); act("/api/session/set", { name: $("#set-name").value, value: $("#set-value").value }); });
+$("#live-form").addEventListener("submit", (e) => { e.preventDefault(); act("/api/confirm_live", { code: $("#live-code").value }); });
+window.addEventListener("resize", () => { clearTimeout(window.__rz); window.__rz = setTimeout(() => RENDER[activeTab]().catch(() => {}), 200); });
+
+(async function boot() {
+  const want = location.hash.slice(1); await refreshState(); await refreshEvents();
+  showTab(RENDER[want] ? want : "overview");
+  setInterval(refreshState, 3000); setInterval(refreshEvents, 4000);
+  setInterval(() => { if (["trades", "analytics", "sessions", "market"].includes(activeTab)) RENDER[activeTab]().catch(() => {}); else if (activeTab === "overview") renderOverviewEquity().catch(() => {}); }, 30000);
+})();
+</script>
+</body>
+</html>

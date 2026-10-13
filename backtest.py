@@ -26,11 +26,12 @@ from typing import Any
 
 from bot.config import ROOT, load_config
 from bot.exits import ExitConfig, check_exit, raise_stop, stop_kind
-from bot.indicators import resample
+from bot.indicators import TF_SECONDS, resample
 from bot.protections import ClosedTrade, ProtectionConfig, entry_blocked
 from bot.risk import (STOP_REASON_RU, DailyCaps, DailyStats, HardCaps, Position, RiskEngine,
                       SessionParams, SessionStatus, StopReason)
-from bot.strategy import Signal, StrategyParams, atr_pct_1h, exit_levels, generate_signal
+from bot.strategy import (Signal, StrategyParams, atr_pct_1h, exit_levels, generate_scalp_signal,
+                          generate_signal)
 from bot.trader import resolve_param
 
 H = 3600_000
@@ -40,14 +41,15 @@ MIN_FEE = 0.001  # 0.1% per side — the minimum cost the user requires in every
 
 # ----------------------------------------------------------------------------- data
 def load_history(symbol: str, days: int, warmup_hours: int = 900, refresh: bool = False,
-                 offline: bool = False) -> list[list[float]]:
-    """1h candles from OKX, cached in data/backtest/. ``offline`` = cache only (reproducible runs)."""
+                 offline: bool = False, tf: str = "1h") -> list[list[float]]:
+    """OKX candles (``tf``: 1m/5m/1h...), cached in data/backtest/. ``offline`` = cache only."""
     import ccxt  # sync client is fine here
 
     CACHE.mkdir(parents=True, exist_ok=True)
-    path = CACHE / f"{symbol.replace('/', '_')}_1h.csv"
-    now = int(time.time() * 1000) // H * H
-    start = now - (days * 24 + warmup_hours) * H
+    step = TF_SECONDS[tf] * 1000
+    path = CACHE / f"{symbol.replace('/', '_')}_{tf}.csv"
+    now = int(time.time() * 1000) // step * step
+    start = (now - (days * 24 + warmup_hours) * H) // step * step
     rows: dict[int, list[float]] = {}
     if path.exists() and not refresh:
         with path.open(encoding="utf-8") as fh:
@@ -65,13 +67,13 @@ def load_history(symbol: str, days: int, warmup_hours: int = 900, refresh: bool 
     if not have or have[0] > start:
         ranges.append((start, have[0] if have else now))
     if have:
-        ranges.append((have[-1] + H, now))
+        ranges.append((have[-1] + step, now))
     for a, b in ranges:
         cursor = a
         while cursor < b:
             for attempt in range(6):
                 try:
-                    batch = ex.fetch_ohlcv(symbol, "1h", since=cursor, limit=100)
+                    batch = ex.fetch_ohlcv(symbol, tf, since=cursor, limit=100)
                     break
                 except ccxt.NetworkError:  # incl. rate limits: back off and retry
                     if attempt == 5:
@@ -79,12 +81,12 @@ def load_history(symbol: str, days: int, warmup_hours: int = 900, refresh: bool 
                     time.sleep(2 ** attempt)
             batch = [x for x in batch if x[0] >= cursor]
             if not batch:
-                cursor += 100 * H  # before the listing date: skip ahead
+                cursor += 100 * step  # before the listing date: skip ahead
                 continue
             for x in batch:
-                if x[0] + H <= now:  # closed candles only
+                if x[0] + step <= now:  # closed candles only
                     rows[int(x[0])] = [int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5] or 0)]
-            cursor = int(batch[-1][0]) + H
+            cursor = int(batch[-1][0]) + step
             print(f"\r  {symbol}: {datetime.fromtimestamp(cursor / 1000, timezone.utc):%Y-%m-%d}", end="", file=sys.stderr)
     print(file=sys.stderr)
     out = [rows[k] for k in sorted(rows) if k >= start]
@@ -216,12 +218,16 @@ class Backtester:
         # control experiment: enter at random with probability p per bar (same exits/limits)
         self.random_entry = random_entry
         self.idx = {s: {int(r[0]): i for i, r in enumerate(rows)} for s, rows in data.items()}
-        self.c4 = {s: resample(rows, "1h", "4h", drop_incomplete=False) for s, rows in data.items()}
+        # bar timeframe of the data (1h by default, 5m for scalping) and the trend timeframe
+        self.bar_tf = strat.signal_tf
+        self.bar_ms = TF_SECONDS[self.bar_tf] * 1000
+        self.trend_ms = TF_SECONDS[strat.trend_tf] * 1000
+        self.c4 = {s: resample(rows, self.bar_tf, strat.trend_tf, drop_incomplete=False) for s, rows in data.items()}
         self.c4ts = {s: [int(r[0]) for r in c] for s, c in self.c4.items()}
 
     def closes_4h(self, s: str, bar_close_ms: int) -> list[float]:
-        """4h candles that are fully closed at ``bar_close_ms`` (no lookahead)."""
-        j = bisect.bisect_right(self.c4ts[s], bar_close_ms - 4 * H)
+        """Trend-timeframe candles (4h, or 1h for scalping) fully closed at ``bar_close_ms`` (no lookahead)."""
+        j = bisect.bisect_right(self.c4ts[s], bar_close_ms - self.trend_ms)
         return [r[4] for r in self.c4[s][max(0, j - (self.strat.ema_slow + 60)):j]]
 
     def signal_at(self, sym: str, i: int):
@@ -230,12 +236,16 @@ class Backtester:
             return per_sym[i]
         rows = self.data[sym]
         c1 = rows[max(0, i - 299):i + 1]
-        close_ms = int(rows[i][0]) + H
+        close_ms = int(rows[i][0]) + self.bar_ms
         btc4 = None
         if self.strat.btc_regime and "BTC/USDT" in self.data:
             btc4 = self.closes_4h("BTC/USDT", close_ms)
-        sig = generate_signal(sym, [r[4] for r in c1], self.closes_4h(sym, close_ms), self.strat,
-                              candles_1h=c1, btc_closes_4h=btc4, fee_rate=self.fee)
+        if self.bar_tf == "5m":
+            sig = generate_scalp_signal(sym, c1, self.closes_4h(sym, close_ms), self.strat,
+                                        btc_closes_1h=btc4, fee_rate=self.fee)
+        else:
+            sig = generate_signal(sym, [r[4] for r in c1], self.closes_4h(sym, close_ms), self.strat,
+                                  candles_1h=c1, btc_closes_4h=btc4, fee_rate=self.fee)
         per_sym[i] = sig
         return sig
 
@@ -254,12 +264,12 @@ class Backtester:
         rnd = random.Random(self.random_entry[1]) if self.random_entry else None
         last_ts = timeline[-1] if timeline else 0
         for ts in timeline:
-            bar_close = (ts + H) / 1000.0
+            bar_close = (ts + self.bar_ms) / 1000.0
             local = datetime.fromtimestamp(ts / 1000, self.tz)
             day = local.strftime("%Y-%m-%d")
             bars = {s: self.data[s][self.idx[s][ts]] for s in self.data if ts in self.idx[s]}
 
-            due = (sid == 0) if self.continuous else (local.hour == self.start_hour)
+            due = (sid == 0) if self.continuous else (local.hour == self.start_hour and local.minute == 0)
             if st is None and due:
                 if (daily_budget[day] + self.params.budget_usdt <= self.engine.daily_caps.daily_budget_cap_usdt
                         and daily_realized[day] > -self.engine.daily_caps.daily_loss_cap_usdt):
@@ -322,12 +332,15 @@ class Backtester:
                         if rnd.random() >= self.random_entry[0] or i < 300:
                             continue
                         sig = None
-                        if self.strat.exit_mode == "atr":  # same exit rule as the strategy under test
+                        scalp = self.bar_tf == "5m"
+                        if self.strat.exit_mode == "atr" or scalp:  # same exit rule as the strategy under test
                             a = atr_pct_1h(self.data[sym][i - 140:i + 1], self.strat.atr_period)
                             if a is None:
                                 continue
-                            sig = Signal(sym, b[4], "random", 0, 0, 0, 0, sl_pct=self.strat.atr_sl_mult * a,
-                                         tp_pct=max(self.strat.atr_tp_mult * a, 6 * self.fee * 100 + 0.01))
+                            ksl = self.strat.scalp_sl_atr if scalp else self.strat.atr_sl_mult
+                            ktp = self.strat.scalp_tp_atr if scalp else self.strat.atr_tp_mult
+                            sig = Signal(sym, b[4], "random", 0, 0, 0, 0, sl_pct=ksl * a,
+                                         tp_pct=max(ktp * a, 6 * self.fee * 100 + 0.01))
                     else:
                         sig = self.signal_at(sym, self.idx[sym][ts])
                         if sig is None:
@@ -365,7 +378,7 @@ def lookahead_check(data: dict[str, list[list[float]]], strat: StrategyParams, s
     rnd = random.Random(seed)
     problems = []
     for sym, rows in data.items():
-        start = strat.ema_slow * 4 + 50
+        start = strat.ema_slow * (TF_SECONDS[strat.trend_tf] // TF_SECONDS[strat.signal_tf]) + 350
         if len(rows) <= start + 1:
             continue
         idxs = sorted(rnd.sample(range(start, len(rows)), min(samples, len(rows) - start)))
