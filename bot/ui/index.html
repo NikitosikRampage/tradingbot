@@ -269,6 +269,9 @@ pre.report { margin: 0; white-space: pre-wrap; font: 13px/1.5 var(--font); color
       <div class="card"><h2>Состояние компонентов</h2><dl class="kv" id="st-health"></dl></div>
     </div>
     <div class="card"><h2>Блокировки входов (protections)</h2><div id="st-locks" class="note">—</div></div>
+    <div class="card"><div class="row"><h2 style="flex:1">Торгуемые пары</h2>
+      <button class="btn" id="btn-pairs" type="button">Пересчитать сейчас</button></div>
+      <p class="note" id="st-pairs">—</p></div>
   </section>
 </main>
 
@@ -539,7 +542,7 @@ async function renderResearch() {
   for (const [name, res] of Object.entries(r)) {
     if (res.dev) { const c = card(name === "scalp_results" ? "5-минутные стратегии: период разработки" : "Часовая стратегия: период разработки (2019–2022)", "PnL в USDT с комиссией 0.1% и проскальзыванием 0.05% на сторону.");
       table(c, ["Вариант", "PnL", "Сделок", "Винрейт", "Просадка", "Комиссии", "Решение"], Object.entries(res.dev).map(([k, d]) => [td(LBL[k] || k), td(fmt2(d.metrics.pnl), cls(d.metrics.pnl)), td(d.metrics.trades), td(num(d.metrics.winrate, 0) + "%"), td(num(d.metrics.max_dd)), td(num(d.metrics.fees)), td(d.accepted == null ? "—" : d.accepted ? "принят" : "отклонён")])); }
-    if (res.holdout) { const c = card(name === "scalp_results" ? "5-минутные стратегии: отложенная проверка" : "Часовая стратегия: отложенная проверка (2023 → сегодня)", "Запускалась один раз для итоговой конфигурации.");
+    if (res.holdout) { const c = card(name === "scalp_results" ? "5-минутные стратегии: отложенная проверка" : "Часовая стратегия: отложенная проверка (2023 → сегодня)", name === "scalp_results" ? "Последние 4 месяца, которые не использовались при разработке. Справочно для обоих вариантов." : "Запускалась один раз для итоговой конфигурации.");
       table(c, ["Конфигурация", "PnL", "Сделок", "Винрейт", "Просадка", "Комиссии", "P(PnL>0) Monte Carlo"], Object.entries(res.holdout).map(([k, h]) => [td(LBL[k] || k), td(fmt2(h.metrics.pnl), cls(h.metrics.pnl)), td(h.metrics.trades), td(num(h.metrics.winrate, 0) + "%"), td(num(h.metrics.max_dd)), td(num(h.metrics.fees)), td(h.mc && h.mc.prob_positive != null ? num(h.mc.prob_positive * 100, 0) + "%" : "—")])); }
     if (res.cost_sensitivity) { const c = card("Результат при разных издержках (отложенный период)", "Справочно. Без издержек видно, есть ли у сигнала преимущество до комиссий.");
       table(c, ["Конфигурация", "Издержки", "PnL", "Сделок"], res.cost_sensitivity.map(x => [td(LBL[x.config] || x.config), td(x.case, "l"), td(fmt2(x.pnl), cls(x.pnl)), td(x.trades)])); }
@@ -552,15 +555,18 @@ async function renderResearch() {
 function kvFill(el, pairs) { el.replaceChildren(); pairs.forEach(([k, v]) => el.append(Object.assign(document.createElement("dt"), { textContent: k }), Object.assign(document.createElement("dd"), { textContent: v }))); }
 function renderSettings() {
   if (!STATE) return; const s = STATE.strategy, e = STATE.exits;
-  const modes = { pullback: "откат RSI на 1h", breakout: "пробой 20-часового максимума", scalp_revert: "5m: возврат к среднему (Боллинджер + RSI)", scalp_breakout: "5m: импульсный пробой с объёмом" };
+  const modes = { pullback: "откат RSI на 1h", breakout: `пробой максимума ${s.breakout_bars} ч`, scalp_revert: "5m: возврат к среднему (Боллинджер + RSI)", scalp_breakout: "5m: импульсный пробой с объёмом" };
   kvFill($("#st-strategy"), [["Вход", modes[s.entry_mode] || s.entry_mode], ["Проверка входа", `на закрытии каждой ${s.signal_tf}-свечи`], ["Фильтр тренда", `EMA${s.ema_fast} > EMA${s.ema_slow} на ${s.trend_tf}`],
     ["Фильтр BTC", s.btc_regime ? "да" : "нет"], ["Выходы", s.entry_mode.startsWith("scalp") ? `SL ${s.scalp_sl_atr}×ATR, TP ${s.scalp_tp_atr}×ATR` : s.exit_mode === "atr" ? `SL ${s.atr_sl_mult}×ATR, TP ${s.atr_tp_mult}×ATR` : "SL/TP сессии"],
     ["Лимит удержания", e.time_limit_hours ? `${e.time_limit_hours} ч` : "нет"], ["Трейлинг / безубыток", `${e.trailing_enabled ? "да" : "нет"} / ${e.breakeven_enabled ? "да" : "нет"}`]]);
-  const d = STATE.defaults; kvFill($("#st-defaults"), [["Бюджет", `${d.budget_usdt} USDT`], ["Длительность", `${d.duration_hours} ч`], ["Макс. убыток", `${d.max_loss_usdt ?? "—"} USDT`], ["Цель", `${d.profit_target_usdt ?? "—"} USDT`],
+  const d = STATE.defaults; kvFill($("#st-defaults"), [["Бюджет", `${d.budget_usdt} USDT`], ["Длительность", `${d.duration_hours} ч`], ["Макс. убыток", d.max_loss_usdt == null ? "—" : `${d.max_loss_usdt} USDT`], ["Цель", d.profit_target_usdt == null ? "не задана" : `${d.profit_target_usdt} USDT`],
     ["Макс. сделок", d.max_trades], ["Размер позиции", `${d.position_size_pct}% бюджета`], ["Позиций одновременно", d.max_open_positions], ["Без входов в конце", `${d.no_entry_last_hours} ч`], ["По окончании", d.on_session_end === "close_all" ? "закрыть всё" : "довести до SL/TP"]]);
   const c = STATE.hard_caps, dc = STATE.daily_caps; kvFill($("#st-caps"), [["Бюджет сессии ≤", `${c.max_budget_usdt} USDT`], ["Убыток сессии ≤", `${c.max_loss_usdt} USDT`], ["Длительность ≤", `${c.max_duration_hours} ч`], ["Сделок за сессию ≤", c.max_trades_per_session],
     ["Сумма бюджетов за день ≤", `${dc.daily_budget_cap_usdt} USDT`], ["Убыток за день ≤", `${dc.daily_loss_cap_usdt} USDT`]]);
   kvFill($("#st-health"), Object.entries(STATE.health).map(([k, v]) => [k, `${Math.round(v)} с назад`]).concat(Object.entries(STATE.errors).map(([k, v]) => ["ошибка " + k, v])));
+  const pl = STATE.pairs; $("#btn-pairs").hidden = !pl.enabled;
+  $("#st-pairs").textContent = (pl.enabled ? "Динамический отбор включён" + (pl.updated ? `, обновлено ${tsfmt(pl.updated)}` : "") : "Динамический отбор выключен (pairlist.enabled в config.yaml) — торгуются пары из symbols")
+    + ": " + (pl.symbols || []).join(", ");
   $("#st-locks").textContent = STATE.locks.length ? STATE.locks.map(l => `${l.reason} — до ${tsfmt(l.until)}`).join("\n") : "Защиты выключены или активных блокировок нет.";
 }
 
@@ -580,6 +586,7 @@ $("#btn-pause").addEventListener("click", () => act("/api/pause", { paused: !(ST
 $("#btn-end").addEventListener("click", () => act("/api/session/end", {}));
 $("#btn-digest").addEventListener("click", () => act("/api/report", { kind: "digest" }).then(refreshEvents));
 $("#btn-mute").addEventListener("click", () => act("/api/mute", { minutes: 60 }));
+$("#btn-pairs").addEventListener("click", () => act("/api/pairs/refresh", {}));
 $("#start-form").addEventListener("submit", (e) => { e.preventDefault(); const params = {}; new FormData(e.target).forEach((v, k) => { if (String(v).trim() !== "") params[k] = String(v).trim(); }); act("/api/session/start", { params }).then(refreshEvents); });
 $("#set-form").addEventListener("submit", (e) => { e.preventDefault(); act("/api/session/set", { name: $("#set-name").value, value: $("#set-value").value }); });
 $("#live-form").addEventListener("submit", (e) => { e.preventDefault(); act("/api/confirm_live", { code: $("#live-code").value }); });
